@@ -1,0 +1,350 @@
+{
+  "name": "01｜週報產生 v0（先手動測，確認後再開排程）",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b2000000-0000-4000-8000-000000000001",
+      "name": "手動執行",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 8 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "b2000000-0000-4000-8000-000000000002",
+      "name": "每週一 08:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -420,
+        480
+      ],
+      "disabled": true,
+      "notes": "確認產出品質後才啟用。時區已在 Workflow Settings 設為 Asia/Taipei。"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 以 Asia/Taipei 計算「上一個完整週」：上週一 00:00 ~ 上週日 23:59:59\nconst OFFSET_MS = 8 * 60 * 60 * 1000;\nconst nowTpe = new Date(Date.now() + OFFSET_MS);\n\n// 用 getUTC* 讀取，等同讀取台北牆上時間\nconst dow = nowTpe.getUTCDay();          // 0=週日\nconst daysSinceMonday = (dow + 6) % 7;   // 週一=0\n\nconst thisMonday = Date.UTC(\n  nowTpe.getUTCFullYear(), nowTpe.getUTCMonth(), nowTpe.getUTCDate() - daysSinceMonday\n);\nconst startMs = thisMonday - 7 * 86400000;\nconst endMs = thisMonday - 1000;\n\nconst pad = (n) => String(n).padStart(2, '0');\nconst fmtDate = (ms) => {\n  const d = new Date(ms);\n  return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate());\n};\nconst fmtIso = (ms) => {\n  const d = new Date(ms);\n  return fmtDate(ms) + 'T' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()) + '+08:00';\n};\n\n// ISO 8601 週次\nfunction isoWeek(ms) {\n  const d = new Date(ms);\n  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));\n  const day = (t.getUTCDay() + 6) % 7;\n  t.setUTCDate(t.getUTCDate() - day + 3);            // 移到該週週四\n  const firstThu = new Date(Date.UTC(t.getUTCFullYear(), 0, 4));\n  const fday = (firstThu.getUTCDay() + 6) % 7;\n  firstThu.setUTCDate(firstThu.getUTCDate() - fday + 3);\n  const week = 1 + Math.round((t.getTime() - firstThu.getTime()) / (7 * 86400000));\n  return { year: t.getUTCFullYear(), week };\n}\n\nconst w = isoWeek(startMs);\n\nreturn [{\n  json: {\n    區間開始: fmtIso(startMs),\n    區間結束: fmtIso(endMs),\n    區間開始日: fmtDate(startMs),\n    區間結束日: fmtDate(endMs),\n    ISO週次: w.year + '-W' + pad(w.week),\n    年度: w.year,\n    上架日期: fmtDate(Date.now() + OFFSET_MS),\n    起始毫秒: startMs - OFFSET_MS,\n    結束毫秒: endMs - OFFSET_MS,\n  }\n}];"
+      },
+      "id": "b2000000-0000-4000-8000-000000000003",
+      "name": "計算週期",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        390
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/databases/96295a88-0745-42be-a5db-b8cd0673ccd9/query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"filter\":{\"property\":\"納入週報\",\"checkbox\":{\"equals\":true}},\"page_size\":100}",
+        "options": {}
+      },
+      "id": "b2000000-0000-4000-8000-000000000004",
+      "name": "查專案",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        40,
+        390
+      ],
+      "executeOnce": true,
+      "notes": "憑證選 Notion 的 Header Auth。回 404 代表 Integration 尚未加入母頁面 Connections。"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/databases/e8151c00-4fdb-4496-8b04-5b91b6cc018d/query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"filter\":{\"property\":\"註冊狀態\",\"select\":{\"equals\":\"已登錄\"}},\"page_size\":100}",
+        "options": {}
+      },
+      "id": "b2000000-0000-4000-8000-000000000005",
+      "name": "查群組登錄",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        390
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "url": "https://line.niddesignlab.com/api/items",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "b2000000-0000-4000-8000-000000000006",
+      "name": "抓 LINE 工作項目",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        390
+      ],
+      "executeOnce": true,
+      "notes": "憑證選 Worker 的 Header Auth（Bearer ADMIN_TOKEN）。⚠️ 第一次執行後請檢查回傳結構，下一個 Code 節點的欄位對應可能要調整。"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 把 專案 × 群組 × LINE項目 組裝成「每個專案一筆」的 LLM 輸入\nconst 週期 = $('計算週期').first().json;\n\nconst SYSTEM_PROMPT = \"你是台灣室內設計公司「川果設計 NID DESIGN LAB」的專案助理，負責整理每週專案週報。\\n\\n嚴格遵守以下規則：\\n1. 只根據提供的資料撰寫。資料裡沒有的事情絕對不可以寫。寧可少寫也不要編造。\\n2.「結論」只放本週已拍板、不會再變的決定。還在討論中的事、單純的進度描述都不算。\\n3.「代辦」只放有明確負責人且尚未完成的行動。沒有負責人的模糊期待不要放。\\n4.「追蹤」放跨週未結案、需要持續盯的事項。本週產生且本週已完成的事不要放。\\n5. 每個群組的摘要控制在 2-4 條，用台灣室內設計業界慣用語。\\n6. 涉及業主的群組用詞要中性客觀，不要出現對業主的評價。\\n7. 若某群組本週沒有資料，該群組的「重點」回傳空陣列，不要硬掰。\\n\\n輸出必須是 JSON，格式如下：\\n{\\n  \\\"群組摘要\\\": [{\\\"群組名稱\\\":\\\"...\\\",\\\"重點\\\":[\\\"...\\\",\\\"...\\\"]}],\\n  \\\"結論\\\": [\\\"...\\\"],\\n  \\\"代辦\\\": [{\\\"事項\\\":\\\"...\\\",\\\"負責人\\\":\\\"...\\\",\\\"期限\\\":\\\"YYYY-MM-DD 或空字串\\\"}],\\n  \\\"追蹤\\\": [{\\\"事項\\\":\\\"...\\\",\\\"說明\\\":\\\"...\\\"}],\\n  \\\"決策摘要\\\": \\\"一句話講本週最重要的決定\\\",\\n  \\\"風險等級\\\": \\\"正常 或 注意 或 警示\\\",\\n  \\\"議題標籤\\\": [\\\"從 設計變更/追加預算/工期延誤/材料選樣/驗收缺失/請款/法規/客訴/人力調度/安全衛生 中挑適用的\\\"],\\n  \\\"涉及金額變動\\\": true 或 false\\n}\";\n\nconst txt = (p) => {\n  if (!p) return '';\n  if (p.type === 'title') return (p.title || []).map(t => t.plain_text).join('');\n  if (p.type === 'rich_text') return (p.rich_text || []).map(t => t.plain_text).join('');\n  if (p.type === 'select') return p.select ? p.select.name : '';\n  if (p.type === 'number') return p.number;\n  if (p.type === 'checkbox') return p.checkbox;\n  return '';\n};\n\n// --- 專案 ---\nconst 專案清單 = (($('查專案').first().json.results) || []).map(p => ({\n  pageId: p.id,\n  名稱: txt(p.properties['專案名稱']),\n  代號: txt(p.properties['專案代號']) || 'NOCODE',\n  slackChannelId: txt(p.properties['Slack Channel ID']),\n}));\n\n// --- 群組登錄 ---\nconst 群組清單 = (($('查群組登錄').first().json.results) || []).map(g => ({\n  pageId: g.id,\n  名稱: txt(g.properties['群組名稱']),\n  平台: txt(g.properties['平台']),\n  groupId: txt(g.properties['群組 ID']),\n  類型: txt(g.properties['群組類型']) || '其他',\n  權重: txt(g.properties['排序權重']),\n  重點指示: txt(g.properties['摘要重點指示']),\n  敏感度: txt(g.properties['敏感度']),\n  專案PageIds: ((g.properties['所屬專案'] || {}).relation || []).map(r => r.id),\n}));\n\n// --- LINE 工作項目：容錯處理不同回傳結構 ---\nconst raw = $('抓 LINE 工作項目').first().json;\nconst 全部項目 = Array.isArray(raw) ? raw\n  : Array.isArray(raw.items) ? raw.items\n  : Array.isArray(raw.results) ? raw.results\n  : Array.isArray(raw.data) ? raw.data\n  : [];\n\nconst 取時間 = (it) => {\n  const v = it.created_at || it.sent_at || it.createdAt || it.due_at || null;\n  if (!v) return null;\n  const ms = typeof v === 'number' ? (v < 1e12 ? v * 1000 : v) : Date.parse(v);\n  return Number.isNaN(ms) ? null : ms;\n};\n\nconst 區間內項目 = 全部項目.filter(it => {\n  const ms = 取時間(it);\n  return ms !== null && ms >= 週期.起始毫秒 && ms <= 週期.結束毫秒;\n});\n\nconst out = [];\nfor (const 專案 of 專案清單) {\n  const 本案群組 = 群組清單\n    .filter(g => g.專案PageIds.includes(專案.pageId))\n    .sort((a, b) => (a.權重 == null ? 90 : a.權重) - (b.權重 == null ? 90 : b.權重));\n\n  const 分段 = 本案群組.map(g => {\n    const 該群項目 = 區間內項目.filter(it => (it.group_id || it.groupId) === g.groupId);\n    return {\n      群組名稱: g.名稱,\n      群組類型: g.類型,\n      重點指示: g.重點指示,\n      敏感度: g.敏感度,\n      則數: 該群項目.length,\n      內容: 該群項目.map(it => ({\n        分類: it.category || it.type || 'info',\n        標題: it.title || '',\n        說明: it.details || it.text || '',\n        負責人: it.owner || '',\n        期限: it.due_at || '',\n      })),\n    };\n  });\n\n  const 總則數 = 分段.reduce((s, d) => s + d.則數, 0);\n\n  out.push({\n    json: Object.assign({}, 週期, {\n      專案PageId: 專案.pageId,\n      專案名稱: 專案.名稱,\n      專案代號: 專案.代號,\n      slackChannelId: 專案.slackChannelId,\n      群組PageIds: 本案群組.map(g => g.pageId),\n      總則數: 總則數,\n      資料完整度: 本案群組.length === 0 ? '來源異常' : (總則數 === 0 ? '部分缺漏' : '完整'),\n      systemPrompt: SYSTEM_PROMPT,\n      userPrompt: [\n        '專案：' + 專案.名稱 + '（' + 專案.代號 + '）',\n        '摘要區間：' + 週期.區間開始日 + ' 至 ' + 週期.區間結束日,\n        '',\n        '以下是各群組本週的討論資料（已依週報顯示順序排列）：',\n        '',\n        JSON.stringify(分段, null, 2),\n      ].join('\\n'),\n    })\n  });\n}\n\nif (out.length === 0) {\n  throw new Error('沒有任何符合條件的專案。請確認「01｜專案」至少有一筆勾選了「納入週報」。');\n}\nreturn out;"
+      },
+      "id": "b2000000-0000-4000-8000-000000000007",
+      "name": "組裝專案資料",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        390
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gpt-5-mini', messages: [ { role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userPrompt } ], response_format: { type: 'json_object' } }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "b2000000-0000-4000-8000-000000000008",
+      "name": "產生摘要",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        920,
+        390
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// 解析 LLM 回傳，組出 Notion 與 Slack 需要的內容\nconst 來源全部 = $('組裝專案資料').all();\nconst out = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const 來源 = 來源全部[i].json;\n  let 摘要;\n  try {\n    摘要 = JSON.parse(items[i].json.choices[0].message.content);\n  } catch (e) {\n    摘要 = {\n      群組摘要: [], 結論: [], 代辦: [], 追蹤: [],\n      決策摘要: '（摘要解析失敗，請檢查 OpenAI 回傳）',\n      風險等級: '注意', 議題標籤: [], 涉及金額變動: false,\n    };\n  }\n\n  const 標題 = '[' + 來源.專案代號 + '] ' + 來源.ISO週次 + ' 週報';\n  const 燈號 = 摘要.風險等級 === '警示' ? '🔴' : (摘要.風險等級 === '注意' ? '🟡' : '🟢');\n\n  // --- Slack 版型 ---\n  const L = [];\n  L.push('📋 *' + 來源.專案名稱 + ' 週報｜' + 來源.ISO週次 + '*');\n  L.push('摘要區間：' + 來源.區間開始日 + ' – ' + 來源.區間結束日 + '　' + 燈號 + ' ' + (摘要.風險等級 || '正常'));\n  L.push('─────────────────────────────');\n  L.push('');\n\n  for (const g of (摘要.群組摘要 || [])) {\n    if (!g.重點 || g.重點.length === 0) continue;\n    L.push('*' + g.群組名稱 + '*');\n    for (const p of g.重點) L.push('　　• ' + p);\n    L.push('');\n  }\n\n  L.push('─────────────────────────────');\n  L.push('📌 *整體摘要*');\n  L.push('');\n  L.push('*【結論】*');\n  if ((摘要.結論 || []).length) {\n    摘要.結論.forEach((c, n) => L.push('　' + (n + 1) + '. ' + c));\n  } else { L.push('　（本週無已拍板事項）'); }\n  L.push('');\n  L.push('*【代辦】*');\n  if ((摘要.代辦 || []).length) {\n    摘要.代辦.forEach((t, n) => {\n      const who = t.負責人 ? '　@' + t.負責人 : '';\n      const due = t.期限 ? '　期限 ' + t.期限 : '';\n      L.push('　' + (n + 1) + '. ' + t.事項 + who + due);\n    });\n  } else { L.push('　（本週無新增代辦）'); }\n  L.push('');\n  L.push('*【追蹤】*');\n  if ((摘要.追蹤 || []).length) {\n    摘要.追蹤.forEach(t => L.push('　⚠️ ' + t.事項 + ' — ' + t.說明));\n  } else { L.push('　（無跨週未結案事項）'); }\n  L.push('');\n  L.push('📊 本週訊息 ' + 來源.總則數 + ' 則　|　資料完整度：' + 來源.資料完整度);\n\n  // --- Notion 頁面內文 ---\n  const N = [];\n  for (const g of (摘要.群組摘要 || [])) {\n    if (!g.重點 || g.重點.length === 0) continue;\n    N.push('## ' + g.群組名稱);\n    for (const p of g.重點) N.push('- ' + p);\n    N.push('');\n  }\n  N.push('## 結論');\n  (摘要.結論 || []).forEach(c => N.push('- ' + c));\n  N.push('');\n  N.push('## 代辦');\n  (摘要.代辦 || []).forEach(t => {\n    const who = t.負責人 ? '（' + t.負責人 + '）' : '';\n    const due = t.期限 ? ' 期限 ' + t.期限 : '';\n    N.push('- ' + t.事項 + who + due);\n  });\n  N.push('');\n  N.push('## 追蹤');\n  (摘要.追蹤 || []).forEach(t => N.push('- ' + t.事項 + ' — ' + t.說明));\n\n  out.push({\n    json: Object.assign({}, 來源, {\n      標題: 標題,\n      摘要: 摘要,\n      slackText: L.join('\\n'),\n      notionBody: N.join('\\n'),\n    })\n  });\n}\n\nreturn out;"
+      },
+      "id": "b2000000-0000-4000-8000-000000000009",
+      "name": "組出版型",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        390
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  parent: { database_id: '47d6b48d-8f7c-4685-bde5-c1b1519a1313' },\n  properties: {\n    '標題': { title: [{ text: { content: $json.標題 } }] },\n    'ISO 週次': { rich_text: [{ text: { content: $json.ISO週次 } }] },\n    '年度': { number: $json.年度 },\n    '上架日期': { date: { start: $json.上架日期 } },\n    '摘要區間': { date: { start: $json.區間開始日, end: $json.區間結束日 } },\n    '專案': { relation: [{ id: $json.專案PageId }] },\n    '來源群組': { relation: $json.群組PageIds.map(id => ({ id })) },\n    '狀態': { select: { name: '草稿' } },\n    '產生方式': { select: { name: '自動' } },\n    '風險等級': { select: { name: $json.摘要.風險等級 || '正常' } },\n    '資料完整度': { select: { name: $json.資料完整度 } },\n    '決策摘要': { rich_text: [{ text: { content: String($json.摘要.決策摘要 || '').slice(0, 1900) } }] },\n    '議題標籤': { multi_select: ($json.摘要.議題標籤 || []).map(n => ({ name: n })) },\n    '涉及金額變動': { checkbox: !!$json.摘要.涉及金額變動 },\n    '有未決事項': { checkbox: ($json.摘要.追蹤 || []).length > 0 },\n    '訊息則數': { number: $json.總則數 },\n    '新增待辦數': { number: ($json.摘要.代辦 || []).length }\n  },\n  children: [{\n    object: 'block', type: 'paragraph',\n    paragraph: { rich_text: [{ text: { content: $json.notionBody.slice(0, 1900) } }] }\n  }]\n}) }}",
+        "options": {}
+      },
+      "id": "b2000000-0000-4000-8000-00000000000a",
+      "name": "寫入 Notion 週報",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        390
+      ],
+      "notes": "先寫成「草稿」狀態。P0 影子模式就停在這一步。"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: $('組出版型').item.json.slackChannelId, text: $('組出版型').item.json.slackText, unfurl_links: false }) }}",
+        "options": {}
+      },
+      "id": "b2000000-0000-4000-8000-00000000000b",
+      "name": "發布到 Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1580,
+        390
+      ],
+      "disabled": true,
+      "notes": "P0 影子模式期間保持停用，只寫 Notion 不發 Slack。通過驗收後再啟用。"
+    }
+  ],
+  "connections": {
+    "手動執行": {
+      "main": [
+        [
+          {
+            "node": "計算週期",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "每週一 08:30": {
+      "main": [
+        [
+          {
+            "node": "計算週期",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "計算週期": {
+      "main": [
+        [
+          {
+            "node": "查專案",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "查專案": {
+      "main": [
+        [
+          {
+            "node": "查群組登錄",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "查群組登錄": {
+      "main": [
+        [
+          {
+            "node": "抓 LINE 工作項目",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "抓 LINE 工作項目": {
+      "main": [
+        [
+          {
+            "node": "組裝專案資料",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組裝專案資料": {
+      "main": [
+        [
+          {
+            "node": "產生摘要",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "產生摘要": {
+      "main": [
+        [
+          {
+            "node": "組出版型",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組出版型": {
+      "main": [
+        [
+          {
+            "node": "寫入 Notion 週報",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "寫入 Notion 週報": {
+      "main": [
+        [
+          {
+            "node": "發布到 Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Taipei"
+  },
+  "pinData": {}
+}

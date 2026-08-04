@@ -1,0 +1,123 @@
+{
+  "name": "00｜連線測試（先跑這個）",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "手動執行",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-200, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://line.niddesignlab.com/api/dashboard",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "1. Worker 儀表板 API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [100, 100],
+      "notes": "Header Auth 憑證：Name=Authorization, Value=Bearer <ADMIN_TOKEN>。成功應回傳工作數量與最近訊息。"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/databases/96295a88-0745-42be-a5db-b8cd0673ccd9/query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Notion-Version", "value": "2022-06-28" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"page_size\": 5}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "2. Notion 專案資料庫",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [100, 300],
+      "notes": "Header Auth 憑證：Name=Authorization, Value=Bearer <Notion Integration Token>。成功應回傳範例專案「文心南六路」。若回 404，代表 Integration 還沒被加入母頁面的 Connections。"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\":\"gpt-5-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"請只回覆兩個字：正常\"}]}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "3. OpenAI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [100, 500],
+      "notes": "Header Auth 憑證：Name=Authorization, Value=Bearer <OPENAI_API_KEY>。若回 model_not_found，把 model 改成你帳號有權限的型號。"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/auth.test",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "4. Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [100, 700],
+      "notes": "Header Auth 憑證：Name=Authorization, Value=Bearer xoxb-...。成功回傳 ok:true 與 team 名稱。"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 彙整四項連線結果\nconst check = (name, node) => {\n  try {\n    const data = $(node).all();\n    return { 項目: name, 結果: '✅ 通過', 摘要: JSON.stringify(data[0]?.json ?? {}).slice(0, 200) };\n  } catch (e) {\n    return { 項目: name, 結果: '❌ 失敗', 摘要: String(e.message).slice(0, 200) };\n  }\n};\n\nreturn [\n  { json: check('Worker 儀表板 API', '1. Worker 儀表板 API') },\n  { json: check('Notion 專案資料庫', '2. Notion 專案資料庫') },\n  { json: check('OpenAI', '3. OpenAI') },\n  { json: check('Slack', '4. Slack') },\n];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "彙整結果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 400]
+    }
+  ],
+  "connections": {
+    "手動執行": {
+      "main": [
+        [
+          { "node": "1. Worker 儀表板 API", "type": "main", "index": 0 },
+          { "node": "2. Notion 專案資料庫", "type": "main", "index": 0 },
+          { "node": "3. OpenAI", "type": "main", "index": 0 },
+          { "node": "4. Slack", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "1. Worker 儀表板 API": {
+      "main": [[{ "node": "彙整結果", "type": "main", "index": 0 }]]
+    },
+    "2. Notion 專案資料庫": {
+      "main": [[{ "node": "彙整結果", "type": "main", "index": 0 }]]
+    },
+    "3. OpenAI": {
+      "main": [[{ "node": "彙整結果", "type": "main", "index": 0 }]]
+    },
+    "4. Slack": {
+      "main": [[{ "node": "彙整結果", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Taipei"
+  },
+  "pinData": {}
+}
