@@ -1,0 +1,1310 @@
+{
+  "name": "01｜LINE 群組訊息接收與歸檔",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "line",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "name": "Webhook｜LINE 接收",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        300
+      ],
+      "webhookId": "3f1a8c40-line-ingest-nid",
+      "notes": "Production URL 就是要填進 LINE Console 的 Webhook URL。Options 已開啟 Raw Body，簽章驗證需要原始位元組。",
+      "id": "5402c4a0-2827-41cc-b8ea-de2c9cbafc0c"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// 驗證 LINE Webhook 的 X-Line-Signature（HMAC-SHA256 + Base64）\n// Channel Secret 由 docker-compose 的環境變數 LINE_CHANNEL_SECRET 提供，\n// 不寫在工作流裡，匯出 JSON 時不會夾帶密鑰。\nconst crypto = require('crypto');\n\nconst item = $input.first();\nconst secret = $env.LINE_CHANNEL_SECRET;\n\nif (!secret) {\n  throw new Error('環境變數 LINE_CHANNEL_SECRET 未設定，無法驗證簽章');\n}\n\n// Webhook 節點開啟 Raw Body 後，原始位元組會放在 binary.data（base64）\nconst b64 = item.binary?.data?.data;\nif (!b64) {\n  throw new Error('取不到原始請求內容，請確認 Webhook 節點的 Options 已開啟 Raw Body');\n}\nconst rawBody = Buffer.from(b64, 'base64');\n\nconst headers = item.json.headers || {};\nconst received = headers['x-line-signature'] || headers['X-Line-Signature'] || '';\nconst expected = crypto.createHmac('sha256', secret).update(rawBody).digest('base64');\n\n// 定時比對，避免時序攻擊；長度不同時 timingSafeEqual 會丟例外，先擋掉\nlet valid = false;\nif (received && received.length === expected.length) {\n  valid = crypto.timingSafeEqual(Buffer.from(received), Buffer.from(expected));\n}\n\nlet body = {};\ntry {\n  body = JSON.parse(rawBody.toString('utf8'));\n} catch (e) {\n  valid = false;\n}\n\nreturn [{ json: { valid, body } }];\n"
+      },
+      "name": "驗證簽章",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        60,
+        300
+      ],
+      "notes": "用 LINE_CHANNEL_SECRET 做 HMAC-SHA256 比對 X-Line-Signature",
+      "id": "86d513c7-4d7a-458c-afe4-c5751079b41e"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "153ba2b0-4ce9-40fe-a7a5-58fd86f79712",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "name": "IF｜簽章有效",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        280,
+        300
+      ],
+      "id": "38856c41-3536-41bc-bf5f-316cacb2ae35"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "name": "回應 LINE｜200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        500,
+        180
+      ],
+      "notes": "LINE 要求 Webhook 儘快回應，因此先回 200 再繼續處理。LINE Console 的 Verify 也靠這個節點。",
+      "id": "fd316f20-89da-4ac2-a855-4660364493c9"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "invalid signature",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "name": "回應 LINE｜401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        500,
+        440
+      ],
+      "notes": "簽章不符：可能 Channel Secret 設錯，或請求不是來自 LINE。",
+      "id": "b12d9632-328e-41b5-9427-50ddc91e95be"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// 把一次 Webhook 內的多筆事件展開成多個 item，並只留下要處理的訊息事件。\n// LINE 一次最多可送 100 筆事件。\nconst TYPE_ZH = {\n  text: '文字', image: '圖片', video: '影片', audio: '音訊',\n  file: '檔案', sticker: '貼圖', location: '位置',\n};\n\n// 這些字被視為閒聊，不送 AI 分類以節省費用\nconst TRIVIAL = new Set([\n  'ok','okay','好','好的','好喔','收到','了解','瞭解','知道了','沒問題','可以',\n  '感謝','謝謝','謝啦','感恩','3q','讚','棒','辛苦了','辛苦','哈囉','嗨','你好',\n  '早','早安','午安','晚安','掰','再見','是','對','嗯','嗯嗯','哈哈','哈哈哈','ㄏㄏ',\n]);\n\nfunction needsAi(text) {\n  if (!text) return false;\n  // 去掉表情符號、標點與空白後再判斷長度\n  const stripped = text\n    .replace(/[\\u{1F000}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\u{FE0F}\\u{200D}]/gu, '')\n    .replace(/[\\s。，、．,.!！?？~～:：;；()（）\\[\\]「」『』-]/g, '');\n  if (stripped.length < 3) return false;\n  if (TRIVIAL.has(stripped.toLowerCase())) return false;\n  return true;\n}\n\nconst out = [];\nfor (const item of $input.all()) {\n  const events = item.json?.body?.events || [];\n  for (const ev of events) {\n    // 只處理訊息事件；加入/離開群組等事件不記錄\n    if (ev.type !== 'message') continue;\n\n    const src = ev.source || {};\n    // 只處理群組與多人聊天室，一對一私訊不進系統\n    if (src.type !== 'group' && src.type !== 'room') continue;\n\n    const m = ev.message || {};\n    const text = m.type === 'text' ? (m.text || '') : '';\n\n    out.push({\n      json: {\n        messageId: m.id || '',\n        messageType: m.type || 'unknown',\n        messageTypeZh: TYPE_ZH[m.type] || '其他',\n        text,\n        needsAi: m.type === 'text' && needsAi(text),\n        fileName: m.fileName || '',\n        fileSize: m.fileSize || 0,\n        contentProvider: m.contentProvider?.type || 'line',\n        sourceType: src.type,\n        groupId: src.groupId || src.roomId || '',\n        userId: src.userId || '',\n        timestamp: ev.timestamp,\n        sentAt: new Date(ev.timestamp).toISOString(),\n        isRedelivery: ev.deliveryContext?.isRedelivery === true,\n      },\n    });\n  }\n}\n\nreturn out;\n"
+      },
+      "name": "展開訊息事件",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        180
+      ],
+      "notes": "一次 Webhook 可含多筆事件；只留群組/聊天室的訊息事件，並標記哪些需要 AI 分類。",
+      "id": "8f0d9411-85d8-4790-b499-4238ca675c85"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/databases/e8151c00-4fdb-4496-8b04-5b91b6cc018d/query",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filter: { and: [ { property: '群組 ID', rich_text: { equals: $json.groupId } }, { property: '註冊狀態', select: { equals: '已登錄' } } ] }, page_size: 1 }) }}"
+      },
+      "name": "Notion｜查詢群組白名單",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        180
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "NOTION_TOKEN",
+          "name": "Notion Integration Token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "notes": "白名單：只有 02｜群組登錄 內狀態為「已登錄」的群組才會被記錄。",
+      "id": "cb2c7a77-9c2e-4d1a-971d-269530701757"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5a63d643-8497-44d7-b10c-9ea7da8baed8",
+              "leftValue": "={{ ($json.results || []).length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "name": "IF｜群組已登錄",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1160,
+        180
+      ],
+      "id": "09fe771b-533e-4b3e-aa09-fd36fbf12ff6"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.line.me/v2/bot/group/{{ $('展開訊息事件').item.json.groupId }}/summary",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "name": "LINE｜取得群組名稱",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1380,
+        460
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LINE_TOKEN",
+          "name": "LINE Channel Access Token"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "notes": "多人聊天室（room）沒有這個 API，取不到名稱時會退回用 Group ID 命名。",
+      "id": "fb164751-10d4-4d2c-b93e-325439628436"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// 官方帳號被拉進「還沒登錄」的群組時，自動在 02｜群組登錄 開一列「待確認」，\n// 讓管理者知道有新群組；核准之前不記錄該群組的任何內容。\nconst d = $('展開訊息事件').item.json;\nconst summary = $('LINE｜取得群組名稱').item.json || {};\nconst groupName = summary.groupName || `未命名群組 ${d.groupId.slice(-6)}`;\n\nreturn {\n  json: {\n    ...d,\n    groupName,\n    notionPayload: {\n      parent: { database_id: $env.NOTION_DB_GROUPS || 'e8151c00-4fdb-4496-8b04-5b91b6cc018d' },\n      properties: {\n        '群組名稱': { title: [{ text: { content: groupName } }] },\n        '群組 ID': { rich_text: [{ text: { content: d.groupId } }] },\n        '平台': { select: { name: 'LINE' } },\n        '註冊狀態': { select: { name: '待確認' } },\n        '註冊時間': { date: { start: d.sentAt } },\n        '備註': {\n          rich_text: [{\n            text: {\n              content: '由 n8n 自動偵測。核准請把「註冊狀態」改成「已登錄」並補上群組類型與所屬專案；在此之前這個群組的訊息與檔案都不會被記錄。',\n            },\n          }],\n        },\n      },\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "組出待確認群組",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        460
+      ],
+      "id": "aea42233-c5f0-4c95-95ec-65bc563c9211"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.notionPayload) }}"
+      },
+      "name": "Notion｜登錄待確認群組",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1820,
+        460
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "NOTION_TOKEN",
+          "name": "Notion Integration Token"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "同一個未登錄群組每次發言都會嘗試新增一列。核准後改成「已登錄」即可，重複的列可直接刪除。",
+      "id": "d8c4bf32-93b2-4df7-85d6-d08efba63e4a"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/databases/687c5006-5421-4692-a9d9-5ff390a9c55a/query",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filter: { property: '訊息 ID', rich_text: { equals: $('展開訊息事件').item.json.messageId } }, page_size: 1 }) }}"
+      },
+      "name": "Notion｜檢查重複訊息",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1380,
+        120
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "NOTION_TOKEN",
+          "name": "Notion Integration Token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "notes": "LINE 在我方失敗時會重送 Webhook，用 Message ID 擋掉重複寫入。",
+      "id": "49bb1eff-3389-4702-aef4-df25b0a36698"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "887ff578-b762-438c-80dd-a7b29e540881",
+              "leftValue": "={{ ($json.results || []).length === 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "name": "IF｜非重複訊息",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1600,
+        120
+      ],
+      "id": "00ed9399-0c7d-47c3-ae61-81f6c284e07a"
+    },
+    {
+      "parameters": {},
+      "name": "略過重複訊息",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1820,
+        320
+      ],
+      "id": "9033950e-b46e-4ecd-8423-d5a393301192"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.line.me/v2/bot/{{ $('展開訊息事件').item.json.sourceType }}/{{ $('展開訊息事件').item.json.groupId }}/member/{{ $('展開訊息事件').item.json.userId }}",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "name": "LINE｜取得發送者名稱",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1820,
+        100
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LINE_TOKEN",
+          "name": "LINE Channel Access Token"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "notes": "成員若未同意提供個人資料，這裡會失敗；失敗時退回顯示 User ID 前 8 碼。",
+      "id": "8a84ed66-4c53-44d0-af12-472b87a5bf9a"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// 把「群組白名單查詢結果」「發送者名稱」與原始訊息欄位合併成後續統一使用的資料。\nconst base = $('展開訊息事件').item.json;\n\n// --- 群組登錄資料（02｜群組登錄）---\nconst groupRow = $('Notion｜查詢群組白名單').item.json?.results?.[0] || {};\nconst gp = groupRow.properties || {};\n\nconst plain = (prop) =>\n  (prop?.rich_text || prop?.title || []).map((t) => t.plain_text).join('').trim();\n\nconst groupPageId = groupRow.id || '';\nconst groupName = plain(gp['群組名稱']) || base.groupId;\nconst projectIds = (gp['所屬專案']?.relation || []).map((r) => ({ id: r.id }));\nconst focusHint = plain(gp['摘要重點指示']);\nconst groupKind = gp['群組類型']?.select?.name || '';\n\n// --- 發送者顯示名稱（取不到時退回 LINE User ID）---\nconst profile = $('LINE｜取得發送者名稱').item.json || {};\nconst displayName = profile.displayName || (base.userId ? base.userId.slice(0, 8) : '未知成員');\n\n// --- 台北時間字串，給檔名與 AI 判斷相對日期用 ---\nconst sentAtTaipei = new Date(base.timestamp).toLocaleString('sv-SE', {\n  timeZone: 'Asia/Taipei',\n});\n\nreturn {\n  json: {\n    ...base,\n    groupPageId,\n    groupName,\n    groupKind,\n    projectIds,\n    focusHint,\n    displayName,\n    sentAtTaipei,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "整理訊息基本欄位",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2040,
+        100
+      ],
+      "notes": "合併群組登錄資料、發送者名稱與原始訊息，成為後續統一使用的欄位。",
+      "id": "53d2f453-25b3-4799-bf78-9184bcf7fff6"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3218fb6f-d75a-4716-982b-d271cd0a5740",
+                    "leftValue": "={{ $json.messageType === 'text' }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "文字"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "9e38abac-9920-4821-80b3-18f81c9cad9d",
+                    "leftValue": "={{ ['image','video','audio','file'].includes($json.messageType) }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "附件"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "其他"
+        }
+      },
+      "name": "Switch｜訊息類型",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2260,
+        100
+      ],
+      "notes": "其他＝貼圖、位置等，仍會留紀錄但不送 AI、不下載檔案。",
+      "id": "7a53c98d-abe1-43eb-a5a7-dbb3a4fa5b04"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "af860315-9727-4965-843a-5cf479d1cb5d",
+              "leftValue": "={{ $json.needsAi }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "name": "IF｜需要 AI 分類",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2480,
+        -100
+      ],
+      "notes": "閒聊、單字回覆與表情符號直接略過 AI，可省下大部分 API 費用。",
+      "id": "ed2eb490-f8e2-45bc-b8db-d5a96f922aea"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// 組出送給 Claude 的分類請求。要調整分類邏輯或提示詞，改這裡就好。\n//\n// 換模型：把 model 改成 'claude-haiku-4-5' 可大幅降低成本（約 1/5），\n// 準確度略降；改成 'claude-sonnet-5' 是折衷選項。\nconst d = $json;\n\nconst schema = {\n  type: 'object',\n  properties: {\n    分類: {\n      type: 'string',\n      enum: ['工作事項', '聯絡事項', '行事曆', '決策', '報價金額', '一般資訊'],\n    },\n    摘要: { type: 'string' },\n    負責人: { type: 'string' },\n    到期時間: { type: 'string' },\n    優先級: { type: 'string', enum: ['緊急', '高', '一般', '低'] },\n    信心值: { type: 'number' },\n  },\n  required: ['分類', '摘要', '負責人', '到期時間', '優先級', '信心值'],\n  additionalProperties: false,\n};\n\nconst system = [\n  '你是台灣室內設計公司「川果設計 NID DESIGN LAB」的訊息分類助理。',\n  '你要把 LINE 群組訊息整理成結構化紀錄，供專案週報與待辦追蹤使用。',\n  '',\n  '分類定義：',\n  '- 工作事項：要有人去做的事，例如出圖、叫料、修改、進場、驗收。',\n  '- 聯絡事項：要聯繫某人或某廠商，或交換聯絡方式。',\n  '- 行事曆：有明確或可推得日期時間的會議、丈量、進場、驗收。',\n  '- 決策：已拍板的選擇，例如選定material、確認尺寸、同意變更。',\n  '- 報價金額：涉及價格、追加減帳、請款、付款。',\n  '- 一般資訊：閒聊、回覆確認、無後續動作的說明。',\n  '',\n  '規則：',\n  '- 摘要用繁體中文，40 字以內，寫「發生什麼事」而不是複述原文。',\n  '- 負責人只填訊息中明確出現的人名或廠商名；沒有就填空字串。',\n  '- 到期時間填 ISO 8601（例如 2026-08-25T10:30:00+08:00）；',\n  '  只有日期沒有時間就填當天 09:00；無法判斷就填空字串。',\n  '- 相對日期（明天、這週五、下週）以下方提供的「目前台北時間」為基準推算。',\n  '- 優先級：有明確急迫字眼才給緊急或高，否則一般。',\n  '- 信心值填 0 到 1 之間的小數，代表你對這次分類的把握。',\n].join('\\n');\n\nconst contextLines = [\n  `目前台北時間：${d.sentAtTaipei}`,\n  `群組名稱：${d.groupName}`,\n  d.groupKind ? `群組類型：${d.groupKind}` : '',\n  d.focusHint ? `此群組的重點提示：${d.focusHint}` : '',\n  `發送者：${d.displayName}`,\n  '',\n  '訊息內容：',\n  d.text,\n].filter(Boolean).join('\\n');\n\nreturn {\n  json: {\n    ...d,\n    aiRequest: {\n      model: 'claude-opus-5',\n      max_tokens: 1024,\n      output_config: {\n        effort: 'low',\n        format: { type: 'json_schema', schema },\n      },\n      system,\n      messages: [{ role: 'user', content: contextLines }],\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "組出 AI 分類請求",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        -200
+      ],
+      "notes": "要調整分類邏輯、提示詞或換模型，改這個節點就好。",
+      "id": "97680f6a-306f-4dbc-8ee1-89732977f522"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "options": {
+          "timeout": 60000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.aiRequest) }}"
+      },
+      "name": "AI 分類（Claude）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2920,
+        -200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ANTHROPIC_KEY",
+          "name": "Anthropic API Key"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "notes": "用 output_config.format 的 JSON Schema 保證回傳可解析。API 失敗時續行，該筆會標成待處理供人工複核。",
+      "id": "c5f9d583-4652-4045-9511-17afd3edef88"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// 解析 Claude 回傳的結構化 JSON，並組出寫入 Notion 06｜訊息紀錄 的 payload。\nconst d = $('整理訊息基本欄位').item.json;\nconst res = $json;\n\nlet ai = {};\ntry {\n  // output_config.format 保證第一個 content block 是合法 JSON 字串\n  const textBlock = (res.content || []).find((c) => c.type === 'text');\n  ai = JSON.parse(textBlock.text);\n} catch (e) {\n  ai = {};\n}\n\n// 安全網：模型若因安全政策拒答，stop_reason 會是 refusal，此時不套用結果\nif (res.stop_reason === 'refusal') ai = {};\n\nconst aiOk = Object.keys(ai).length > 0;   // AI 失敗時留待人工複核\nconst 分類 = ai['分類'] || '一般資訊';\nconst 摘要 = (ai['摘要'] || d.text || '').slice(0, 200);\nconst 負責人 = ai['負責人'] || '';\nconst 優先級 = ai['優先級'] || '一般';\nconst 信心值 = typeof ai['信心值'] === 'number' ? ai['信心值'] : null;\n\nlet 到期時間 = null;\nconst rawDue = ai['到期時間'];\nif (rawDue && !Number.isNaN(Date.parse(rawDue))) 到期時間 = rawDue;\n\nconst properties = {\n  '摘要': { title: [{ text: { content: 摘要 || '（空白訊息）' } }] },\n  '訊息 ID': { rich_text: [{ text: { content: d.messageId } }] },\n  '群組 ID': { rich_text: [{ text: { content: d.groupId } }] },\n  '發送者': { rich_text: [{ text: { content: d.displayName } }] },\n  '發送者 ID': { rich_text: [{ text: { content: d.userId || '' } }] },\n  '發送時間': { date: { start: d.sentAt, time_zone: null } },\n  '訊息類型': { select: { name: d.messageTypeZh } },\n  '內容': { rich_text: [{ text: { content: (d.text || '').slice(0, 2000) } }] },\n  '分類': { select: { name: 分類 } },\n  '優先級': { select: { name: 優先級 } },\n  '負責人': { rich_text: [{ text: { content: 負責人 } }] },\n  '處理狀態': { select: { name: (aiOk && 分類 === '一般資訊') ? '已處理' : '待處理' } },\n};\n\nif (信心值 !== null) properties['AI 信心值'] = { number: 信心值 };\nif (到期時間) properties['到期時間'] = { date: { start: 到期時間 } };\nif (d.groupPageId) properties['群組'] = { relation: [{ id: d.groupPageId }] };\nif (d.projectIds?.length) properties['所屬專案'] = { relation: d.projectIds };\n\nreturn {\n  json: {\n    ...d,\n    分類,\n    摘要,\n    notionPayload: {\n      parent: { database_id: $env.NOTION_DB_MESSAGES || '687c5006-5421-4692-a9d9-5ff390a9c55a' },\n      properties,\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "整理分類結果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3140,
+        -200
+      ],
+      "id": "caec9b17-b79f-4b42-afdd-d126861adbe7"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// 不需要 AI 分類的訊息（閒聊、貼圖、位置等）直接以預設值寫入，省下 API 費用。\nconst d = $json;\n\nconst 摘要 = d.messageType === 'text'\n  ? (d.text || '').slice(0, 200)\n  : `[${d.messageTypeZh}]`;\n\nconst properties = {\n  '摘要': { title: [{ text: { content: 摘要 || '（空白訊息）' } }] },\n  '訊息 ID': { rich_text: [{ text: { content: d.messageId } }] },\n  '群組 ID': { rich_text: [{ text: { content: d.groupId } }] },\n  '發送者': { rich_text: [{ text: { content: d.displayName } }] },\n  '發送者 ID': { rich_text: [{ text: { content: d.userId || '' } }] },\n  '發送時間': { date: { start: d.sentAt } },\n  '訊息類型': { select: { name: d.messageTypeZh } },\n  '內容': { rich_text: [{ text: { content: (d.text || '').slice(0, 2000) } }] },\n  '分類': { select: { name: '一般資訊' } },\n  '優先級': { select: { name: '低' } },\n  '處理狀態': { select: { name: '已處理' } },\n};\n\nif (d.groupPageId) properties['群組'] = { relation: [{ id: d.groupPageId }] };\nif (d.projectIds?.length) properties['所屬專案'] = { relation: d.projectIds };\n\nreturn {\n  json: {\n    ...d,\n    分類: '一般資訊',\n    摘要,\n    notionPayload: {\n      parent: { database_id: $env.NOTION_DB_MESSAGES || '687c5006-5421-4692-a9d9-5ff390a9c55a' },\n      properties,\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "套用預設分類",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        40
+      ],
+      "id": "f5e8e128-fb49-4312-bcff-538182529bb4"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.notionPayload) }}"
+      },
+      "name": "Notion｜寫入訊息紀錄",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3360,
+        -60
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "NOTION_TOKEN",
+          "name": "Notion Integration Token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "寫入 06｜訊息紀錄",
+      "id": "6ca3ec09-e70e-488c-9b35-6ccde68f822d"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api-data.line.me/v2/bot/message/{{ $json.messageId }}/content",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 120000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "name": "LINE｜下載檔案內容",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2480,
+        320
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LINE_TOKEN",
+          "name": "LINE Channel Access Token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "LINE 的檔案有保存期限，必須即時下載。大型影片可能需要較長時間。",
+      "id": "121858f1-e239-484e-bdcd-a49ddc1f2c35"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// 決定檔案在 Dropbox 的存放路徑、檔案類型與用途分類。\n// 本節點以「每筆項目執行一次」模式運作，並把 binary 原封不動往下傳。\nconst d = $('整理訊息基本欄位').item.json;\nconst bin = $input.item.binary?.data || {};\n\nconst ROOT = '/NIDDESIGN-LINE助理';\n\n// Dropbox 不接受 / \\ : ? * < > \" | 與控制字元，開頭結尾也不能是空白或句點\nconst safe = (s) =>\n  String(s || '')\n    .split('')\n    .filter((ch) => ch.charCodeAt(0) > 31)\n    .join('')\n    .replace(/[\\/\\\\:?*<>\"|]/g, '_')\n    .replace(/^[.\\s]+|[.\\s]+$/g, '')\n    .slice(0, 120) || '未命名';\n\n// --- 副檔名 ---\nconst MIME_EXT = {\n  'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif',\n  'image/webp': 'webp', 'image/heic': 'heic',\n  'video/mp4': 'mp4', 'video/quicktime': 'mov',\n  'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/mpeg': 'mp3',\n};\nconst DEFAULT_EXT = { image: 'jpg', video: 'mp4', audio: 'm4a', file: 'bin' };\n\nlet originalName = d.fileName || '';\nlet ext = '';\nif (originalName.includes('.')) {\n  ext = originalName.split('.').pop().toLowerCase();\n} else {\n  ext = MIME_EXT[bin.mimeType] || bin.fileExtension || DEFAULT_EXT[d.messageType] || 'bin';\n}\n\n// --- 台北時間戳，用於檔名與資料夾 ---\nconst parts = new Intl.DateTimeFormat('sv-SE', {\n  timeZone: 'Asia/Taipei',\n  year: 'numeric', month: '2-digit', day: '2-digit',\n  hour: '2-digit', minute: '2-digit', second: '2-digit',\n  hour12: false,\n}).format(new Date(d.timestamp));            // 例：2026-08-22 14:03:51\nconst [datePart, timePart] = parts.split(' ');\nconst yearMonth = datePart.slice(0, 7);       // 2026-08\nconst stamp = `${datePart.replace(/-/g, '')}-${timePart.replace(/:/g, '')}`;\n\n// --- 檔名 ---\nif (!originalName) originalName = `${d.messageType}.${ext}`;\nconst baseName = safe(originalName.replace(/\\.[^.]+$/, ''));\nconst fileName = `${stamp}_${safe(d.displayName)}_${baseName}.${ext}`;\n\n// --- 群組資料夾：附上 Group ID 後 6 碼，避免同名群組互相覆蓋 ---\nconst groupFolder = `${safe(d.groupName)}_${d.groupId.slice(-6)}`;\nconst dropboxPath = `${ROOT}/${groupFolder}/${yearMonth}/${fileName}`;\n\n// --- 檔案類型 ---\nconst TYPE_MAP = [\n  [['jpg','jpeg','png','gif','webp','heic','heif','bmp','tif','tiff'], '照片'],\n  [['mp4','mov','avi','mkv','m4v','3gp','wmv'], '影片'],\n  [['m4a','mp3','wav','aac','ogg','amr'], '音訊'],\n  [['pdf'], 'PDF'],\n  [['dwg','dxf','dwf','rvt','rfa','skp','3ds','max','sat','step','stp','igs','iges'], 'CAD 圖檔'],\n  [['xls','xlsx','xlsm','csv','numbers'], '試算表'],\n  [['doc','docx','ppt','pptx','txt','rtf','pages','key','odt'], '文件'],\n  [['zip','rar','7z','tar','gz'], '壓縮檔'],\n];\nlet fileKind = '其他';\nfor (const [exts, name] of TYPE_MAP) {\n  if (exts.includes(ext)) { fileKind = name; break; }\n}\n\n// --- 用途分類：先用檔名關鍵字猜，猜不到就留給人工 ---\nconst lower = originalName.toLowerCase();\nconst has = (...kw) => kw.some((k) => lower.includes(k));\nlet usage = '待分類';\nif (has('報價', '估價', 'quote', 'quotation')) usage = '報價單';\nelse if (has('合約', '契約', 'contract', '訂單')) usage = '合約';\nelse if (fileKind === 'CAD 圖檔' || has('平面', '立面', '剖面', '施工圖', '圖說', '大樣')) usage = '設計圖';\nelse if (has('完工', '驗收', '交屋')) usage = '完工照';\nelse if (has('材料', '樣品', 'sample', '建材')) usage = '材料樣品';\nelse if (has('現場', '施工', '進度', '缺失')) usage = '施工照片';\n\n// --- Dropbox-API-Arg 是 HTTP header，必須是純 ASCII ---\n// 中文檔名要轉成 \\uXXXX 逸出序列，否則 HTTP 用戶端會拒絕送出這個 header。\nconst asciiEscape = (s) =>\n  s.split('').map((ch) => {\n    const code = ch.charCodeAt(0);\n    return (code >= 32 && code <= 126) ? ch : '\\\\u' + code.toString(16).padStart(4, '0');\n  }).join('');\n\nconst dropboxApiArg = asciiEscape(JSON.stringify({\n  path: dropboxPath,\n  mode: 'add',\n  autorename: true,      // 同名不覆蓋，自動加序號\n  mute: true,\n  strict_conflict: false,\n}));\n\nreturn {\n  json: {\n    ...d,\n    originalFileName: originalName,\n    fileName,\n    ext,\n    fileKind,\n    usage,\n    dropboxPath,\n    dropboxApiArg,\n    fileSizeMB: d.fileSize ? Number((d.fileSize / 1048576).toFixed(3)) : null,\n  },\n  binary: $input.item.binary,    // 保留二進位內容給下一個上傳節點\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "組出 Dropbox 路徑",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        320
+      ],
+      "notes": "決定存放路徑、檔案類型與用途分類；中文檔名會轉成 ASCII 逸出序列給 Dropbox header 用。",
+      "id": "0021aadb-65b3-4994-9f3f-ab527d9e7a83"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://content.dropboxapi.com/2/files/upload",
+        "options": {
+          "timeout": 180000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "dropboxOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Dropbox-API-Arg",
+              "value": "={{ $json.dropboxApiArg }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/octet-stream"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data"
+      },
+      "name": "Dropbox｜上傳檔案",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2920,
+        320
+      ],
+      "credentials": {
+        "dropboxOAuth2Api": {
+          "id": "DROPBOX_OAUTH",
+          "name": "Dropbox OAuth2"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "單次上傳上限 150MB。超過的影片會失敗，會在 05｜檔案索引 標成「上傳失敗」。",
+      "id": "a5f89e5e-7be8-4fe1-815e-d90c14fbd4a6"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings",
+        "options": {},
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "dropboxOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ path: $json.path_display }) }}"
+      },
+      "name": "Dropbox｜建立分享連結",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3140,
+        320
+      ],
+      "credentials": {
+        "dropboxOAuth2Api": {
+          "id": "DROPBOX_OAUTH",
+          "name": "Dropbox OAuth2"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "notes": "取不到連結不影響備份，Notion 仍會記錄 Dropbox 路徑。",
+      "id": "cf84ba4f-738c-42fb-8723-7561721cf409"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// 整理 Dropbox 上傳與分享連結的結果，組出寫入 Notion 05｜檔案索引 的 payload。\nconst d = $('組出 Dropbox 路徑').item.json;\nconst upload = $('Dropbox｜上傳檔案').item.json || {};\nconst share = $json || {};\n\n// autorename 可能改過檔名，一律以 Dropbox 實際回傳的路徑為準\nconst finalPath = upload.path_display || d.dropboxPath;\nconst finalName = upload.name || d.fileName;\nconst sizeMB = upload.size ? Number((upload.size / 1048576).toFixed(3)) : d.fileSizeMB;\n\n// 分享連結正常在 .url；若連結已存在，Dropbox 會把既有連結放在錯誤內容裡\nconst url =\n  share.url ||\n  share?.error?.shared_link_already_exists?.metadata?.url ||\n  '';\n\nconst backupStatus = upload.path_display ? '已備份' : '上傳失敗';\n\nconst properties = {\n  '檔名': { title: [{ text: { content: finalName } }] },\n  '訊息 ID': { rich_text: [{ text: { content: d.messageId } }] },\n  '群組 ID': { rich_text: [{ text: { content: d.groupId } }] },\n  '上傳者': { rich_text: [{ text: { content: d.displayName } }] },\n  '上傳時間': { date: { start: d.sentAt } },\n  '檔案類型': { select: { name: d.fileKind } },\n  '用途分類': { select: { name: d.usage } },\n  '副檔名': { rich_text: [{ text: { content: d.ext } }] },\n  'Dropbox 路徑': { rich_text: [{ text: { content: finalPath } }] },\n  '備份狀態': { select: { name: backupStatus } },\n};\n\nif (sizeMB !== null && sizeMB !== undefined) properties['檔案大小'] = { number: sizeMB };\nif (url) properties['Dropbox 連結'] = { url };\nif (d.groupPageId) properties['群組'] = { relation: [{ id: d.groupPageId }] };\nif (d.projectIds?.length) properties['所屬專案'] = { relation: d.projectIds };\n\nreturn {\n  json: {\n    ...d,\n    finalPath,\n    finalName,\n    shareUrl: url,\n    notionPayload: {\n      parent: { database_id: $env.NOTION_DB_FILES || '32903708-fccf-48a0-b219-767da737f0ea' },\n      properties,\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "組出檔案索引",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        320
+      ],
+      "id": "afcd40cd-727a-4899-94b9-3a53cd4473b7"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.notionPayload) }}"
+      },
+      "name": "Notion｜寫入檔案索引",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3580,
+        320
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "NOTION_TOKEN",
+          "name": "Notion Integration Token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "寫入 05｜檔案索引",
+      "id": "5864a67c-1fe2-4feb-b603-cd750af68abb"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// 附件也要在 06｜訊息紀錄 留一筆，讓群組的時間軸完整，\n// 並用「關聯檔案」把這筆訊息接回 05｜檔案索引 的那一列。\nconst d = $('組出檔案索引').item.json;\nconst filePage = $json || {};\n\nconst properties = {\n  '摘要': { title: [{ text: { content: `[${d.fileKind}] ${d.finalName}` } }] },\n  '訊息 ID': { rich_text: [{ text: { content: d.messageId } }] },\n  '群組 ID': { rich_text: [{ text: { content: d.groupId } }] },\n  '發送者': { rich_text: [{ text: { content: d.displayName } }] },\n  '發送者 ID': { rich_text: [{ text: { content: d.userId || '' } }] },\n  '發送時間': { date: { start: d.sentAt } },\n  '訊息類型': { select: { name: d.messageTypeZh } },\n  '內容': { rich_text: [{ text: { content: d.finalPath } }] },\n  '分類': { select: { name: d.usage === '報價單' ? '報價金額' : '一般資訊' } },\n  '優先級': { select: { name: '一般' } },\n  '處理狀態': { select: { name: d.usage === '待分類' ? '待處理' : '已處理' } },\n};\n\nif (d.groupPageId) properties['群組'] = { relation: [{ id: d.groupPageId }] };\nif (d.projectIds?.length) properties['所屬專案'] = { relation: d.projectIds };\nif (filePage.id) properties['關聯檔案'] = { relation: [{ id: filePage.id }] };\n\nreturn {\n  json: {\n    ...d,\n    filePageId: filePage.id || '',\n    notionPayload: {\n      parent: { database_id: $env.NOTION_DB_MESSAGES || '687c5006-5421-4692-a9d9-5ff390a9c55a' },\n      properties,\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "組出附件訊息紀錄",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3800,
+        320
+      ],
+      "id": "06629ed8-eeac-4f10-99cf-364e86feb01b"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.notionPayload) }}"
+      },
+      "name": "Notion｜寫入附件訊息紀錄",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4020,
+        320
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "NOTION_TOKEN",
+          "name": "Notion Integration Token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "寫入 06｜訊息紀錄，並用「關聯檔案」連回剛剛那筆檔案索引。",
+      "id": "33fe93c7-c225-410f-a030-c1f7af559422"
+    },
+    {
+      "parameters": {
+        "content": "## 1. 收訊與驗證\n\nLINE → Webhook → HMAC-SHA256 簽章驗證 → 先回 200 再處理。\n\n**要填進 LINE Console 的網址**：\n`https://<你的網域>/webhook/line`\n\nChannel Secret 來自 docker-compose 的環境變數 `LINE_CHANNEL_SECRET`，不存在工作流裡。",
+        "height": 240,
+        "width": 820,
+        "color": 4
+      },
+      "name": "說明-a54a55",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        20
+      ],
+      "id": "54d3375f-e46c-4500-8ba8-d99391fb51e2"
+    },
+    {
+      "parameters": {
+        "content": "## 2. 群組白名單\n\n只記錄 Notion「02｜群組登錄」中狀態為 **已登錄** 的群組。\n\n沒登錄的群組 → 自動開一列「待確認」，在你核准前**不會**記錄任何內容。\n\n這是隱私與法遵的第一道閘門，不要拿掉。",
+        "height": 240,
+        "width": 640,
+        "color": 3
+      },
+      "name": "說明-2fffd0",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        900,
+        -120
+      ],
+      "id": "c0b90318-f5ca-415b-b05d-de6438463bde"
+    },
+    {
+      "parameters": {
+        "content": "## 3. 文字訊息\n\n先過濾閒聊（「收到」「好」「👍」等），只有真正有內容的訊息才送 Claude 分類。\n\n分類：工作事項／聯絡事項／行事曆／決策／報價金額／一般資訊\n\n→ 寫入「06｜訊息紀錄」",
+        "height": 260,
+        "width": 640,
+        "color": 5
+      },
+      "name": "說明-e0605e",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2440,
+        -420
+      ],
+      "id": "2298ddb4-2337-4a95-997b-bdf004c9a4b4"
+    },
+    {
+      "parameters": {
+        "content": "## 4. 附件備份\n\nLINE 下載 → Dropbox 上傳 → 建立分享連結 → 寫入「05｜檔案索引」→ 在「06｜訊息紀錄」補一筆並互相關聯。\n\n路徑：`/NIDDESIGN-LINE助理/{群組}_{ID後6碼}/{年-月}/{時間戳}_{發送者}_{原檔名}`\n\n**注意**：LINE 的「照片」會被壓縮；要保留原檔（含 DWG、報價單 PDF）請用「檔案」方式傳送。",
+        "height": 280,
+        "width": 900,
+        "color": 6
+      },
+      "name": "說明-4a61a9",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2440,
+        540
+      ],
+      "id": "d36ea6bc-5fbd-4f13-82af-e8aae0b67ae1"
+    }
+  ],
+  "connections": {
+    "Webhook｜LINE 接收": {
+      "main": [
+        [
+          {
+            "node": "驗證簽章",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "驗證簽章": {
+      "main": [
+        [
+          {
+            "node": "IF｜簽章有效",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF｜簽章有效": {
+      "main": [
+        [
+          {
+            "node": "回應 LINE｜200",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "回應 LINE｜401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "回應 LINE｜200": {
+      "main": [
+        [
+          {
+            "node": "展開訊息事件",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "展開訊息事件": {
+      "main": [
+        [
+          {
+            "node": "Notion｜查詢群組白名單",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion｜查詢群組白名單": {
+      "main": [
+        [
+          {
+            "node": "IF｜群組已登錄",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF｜群組已登錄": {
+      "main": [
+        [
+          {
+            "node": "Notion｜檢查重複訊息",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "LINE｜取得群組名稱",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LINE｜取得群組名稱": {
+      "main": [
+        [
+          {
+            "node": "組出待確認群組",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組出待確認群組": {
+      "main": [
+        [
+          {
+            "node": "Notion｜登錄待確認群組",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion｜檢查重複訊息": {
+      "main": [
+        [
+          {
+            "node": "IF｜非重複訊息",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF｜非重複訊息": {
+      "main": [
+        [
+          {
+            "node": "LINE｜取得發送者名稱",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "略過重複訊息",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LINE｜取得發送者名稱": {
+      "main": [
+        [
+          {
+            "node": "整理訊息基本欄位",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "整理訊息基本欄位": {
+      "main": [
+        [
+          {
+            "node": "Switch｜訊息類型",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch｜訊息類型": {
+      "main": [
+        [
+          {
+            "node": "IF｜需要 AI 分類",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "LINE｜下載檔案內容",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "套用預設分類",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF｜需要 AI 分類": {
+      "main": [
+        [
+          {
+            "node": "組出 AI 分類請求",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "套用預設分類",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組出 AI 分類請求": {
+      "main": [
+        [
+          {
+            "node": "AI 分類（Claude）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI 分類（Claude）": {
+      "main": [
+        [
+          {
+            "node": "整理分類結果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "整理分類結果": {
+      "main": [
+        [
+          {
+            "node": "Notion｜寫入訊息紀錄",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "套用預設分類": {
+      "main": [
+        [
+          {
+            "node": "Notion｜寫入訊息紀錄",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LINE｜下載檔案內容": {
+      "main": [
+        [
+          {
+            "node": "組出 Dropbox 路徑",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組出 Dropbox 路徑": {
+      "main": [
+        [
+          {
+            "node": "Dropbox｜上傳檔案",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dropbox｜上傳檔案": {
+      "main": [
+        [
+          {
+            "node": "Dropbox｜建立分享連結",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dropbox｜建立分享連結": {
+      "main": [
+        [
+          {
+            "node": "組出檔案索引",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組出檔案索引": {
+      "main": [
+        [
+          {
+            "node": "Notion｜寫入檔案索引",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion｜寫入檔案索引": {
+      "main": [
+        [
+          {
+            "node": "組出附件訊息紀錄",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組出附件訊息紀錄": {
+      "main": [
+        [
+          {
+            "node": "Notion｜寫入附件訊息紀錄",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Taipei",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "tags": [],
+  "meta": {
+    "instanceId": "nid-design-lab"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,4 @@
+infra/n8n/.env
+infra/n8n/backups/
+infra/n8n/files/
+*.log

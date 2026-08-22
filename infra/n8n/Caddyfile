@@ -1,0 +1,27 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$N8N_HOST} {
+	encode zstd gzip
+
+	# LINE 的 Webhook 只會打 /webhook/*，其餘路徑是 n8n 編輯器
+	reverse_proxy n8n:5678 {
+		flush_interval -1
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10MB
+			roll_keep 5
+		}
+	}
+}

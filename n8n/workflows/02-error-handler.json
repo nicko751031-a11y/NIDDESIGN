@@ -1,0 +1,119 @@
+{
+  "name": "02｜錯誤通知",
+  "nodes": [
+    {
+      "id": "b4c3450e-b51c-4a47-963c-8221709459f4",
+      "parameters": {},
+      "name": "錯誤觸發",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "在其他工作流的 Settings → Error Workflow 選擇本工作流，失敗時就會觸發這裡。"
+    },
+    {
+      "id": "21e1bf3b-57e9-4fc4-8bb3-e8eec10a4606",
+      "parameters": {
+        "jsCode": "\n// 把 n8n 的錯誤資訊整理成一則 LINE 訊息。\n// 推播對象由環境變數 N8N_ALERT_LINE_TARGET 指定（管理者的 User ID 或內部群組的 Group ID）。\nconst target = $env.N8N_ALERT_LINE_TARGET;\nif (!target) {\n  throw new Error('環境變數 N8N_ALERT_LINE_TARGET 未設定，無法推播錯誤通知');\n}\n\nconst e = $json.execution || {};\nconst w = $json.workflow || {};\n\nconst when = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' });\nconst msg = (e.error?.message || '未知錯誤').slice(0, 300);\n\nconst lines = [\n  '⚠️ LINE 助理系統發生錯誤',\n  '',\n  `時間：${when}`,\n  `工作流：${w.name || '未知'}`,\n  `失敗節點：${e.lastNodeExecuted || '未知'}`,\n  '',\n  `錯誤訊息：${msg}`,\n];\nif (e.url) lines.push('', `執行紀錄：${e.url}`);\n\nreturn [{\n  json: {\n    pushPayload: {\n      to: target,\n      messages: [{ type: 'text', text: lines.join('\\n').slice(0, 4900) }],\n    },\n  },\n}];\n"
+      },
+      "name": "組出通知內容",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "id": "644fc230-0038-44dd-a21d-b36b6092aeca",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.line.me/v2/bot/message/push",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.pushPayload) }}",
+        "options": {}
+      },
+      "name": "LINE｜推播給管理者",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "LINE_TOKEN",
+          "name": "LINE Channel Access Token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "notes": "推播訊息會計入 LINE 官方帳號的訊息額度。免費方案每月有上限，錯誤太頻繁時請注意。"
+    },
+    {
+      "id": "f6401b6c-5444-48b7-90ad-bbf199eb3f32",
+      "parameters": {
+        "content": "## 錯誤通知\n\n任一工作流失敗時，透過 LINE 官方帳號推播給管理者。\n\n**設定方式**\n1. 在 `.env` 填 `N8N_ALERT_LINE_TARGET`（你的 LINE User ID，或內部群組的 Group ID）\n2. `docker compose up -d` 重新載入\n3. 到「01｜LINE 群組訊息接收與歸檔」的 Settings → Error Workflow 選本工作流\n\nUser ID 可從 01 工作流任一次執行紀錄的「展開訊息事件」節點取得。",
+        "height": 300,
+        "width": 460,
+        "color": 3
+      },
+      "name": "說明",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -60
+      ]
+    }
+  ],
+  "connections": {
+    "錯誤觸發": {
+      "main": [
+        [
+          {
+            "node": "組出通知內容",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組出通知內容": {
+      "main": [
+        [
+          {
+            "node": "LINE｜推播給管理者",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Taipei"
+  },
+  "tags": [],
+  "meta": {
+    "instanceId": "nid-design-lab"
+  },
+  "pinData": {}
+}
