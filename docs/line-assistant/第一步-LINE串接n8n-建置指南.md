@@ -102,6 +102,10 @@ n8n（自架於你的 VPS）
 
 ## 4. 步驟一：VPS 與 DNS
 
+> **沒有伺服器經驗？** 這一節是摘要。
+> 逐步的點擊級操作（選哪家 VPS、Windows 怎麼 SSH、Cloudflare 怎麼設、卡住怎麼辦）
+> 請看 [`VPS開通與DNS設定-逐步操作.md`](VPS開通與DNS設定-逐步操作.md)。
+
 ### 4.1 設定 DNS
 
 到管理 `niddesignlab.com` 的地方新增一筆 A 記錄：
@@ -125,7 +129,9 @@ SSH 進 VPS，然後：
 ```bash
 # 取得本專案
 sudo apt-get update && sudo apt-get install -y git
-sudo git clone https://github.com/nicko751031-a11y/niddesign.git /opt/niddesign
+# 注意：-b 分支名稱不能省略，repo 的預設分支還沒有這些檔案
+sudo git clone -b claude/line-assistant-n8n-integration-57c1w3 \
+  https://github.com/nicko751031-a11y/NIDDESIGN.git /opt/niddesign
 cd /opt/niddesign/infra/n8n
 
 # 建立設定檔（腳本會自動產生加密金鑰與資料庫密碼）

@@ -3,6 +3,7 @@
 給川果設計 LINE 助理系統使用的 n8n 部署設定：n8n + PostgreSQL + Caddy（自動 HTTPS）。
 
 完整步驟見 [`docs/line-assistant/第一步-LINE串接n8n-建置指南.md`](../../docs/line-assistant/第一步-LINE串接n8n-建置指南.md)。
+第一次開機器、設 DNS 的逐步操作見 [`VPS開通與DNS設定-逐步操作.md`](../../docs/line-assistant/VPS開通與DNS設定-逐步操作.md)。
 
 ## 快速安裝
 
@@ -10,7 +11,11 @@
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git
-sudo git clone https://github.com/nicko751031-a11y/niddesign.git /opt/niddesign
+
+# -b 分支名稱不能省略：repo 的預設分支尚未包含這些檔案
+sudo git clone -b claude/line-assistant-n8n-integration-57c1w3 \
+  https://github.com/nicko751031-a11y/NIDDESIGN.git /opt/niddesign
+
 cd /opt/niddesign/infra/n8n
 sudo cp .env.example .env
 sudo nano .env          # 填 N8N_HOST、ACME_EMAIL、LINE_CHANNEL_SECRET
