@@ -5,7 +5,7 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "line",
-        "responseMode": "responseNode",
+        "responseMode": "onReceived",
         "options": {
           "rawBody": true
         }
@@ -69,42 +69,6 @@
         300
       ],
       "id": "38856c41-3536-41bc-bf5f-316cacb2ae35"
-    },
-    {
-      "parameters": {
-        "respondWith": "text",
-        "responseBody": "OK",
-        "options": {
-          "responseCode": 200
-        }
-      },
-      "name": "回應 LINE｜200",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [
-        500,
-        180
-      ],
-      "notes": "LINE 要求 Webhook 儘快回應，因此先回 200 再繼續處理。LINE Console 的 Verify 也靠這個節點。",
-      "id": "fd316f20-89da-4ac2-a855-4660364493c9"
-    },
-    {
-      "parameters": {
-        "respondWith": "text",
-        "responseBody": "invalid signature",
-        "options": {
-          "responseCode": 401
-        }
-      },
-      "name": "回應 LINE｜401",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [
-        500,
-        440
-      ],
-      "notes": "簽章不符：可能 Channel Secret 設錯，或請求不是來自 LINE。",
-      "id": "b12d9632-328e-41b5-9427-50ddc91e95be"
     },
     {
       "parameters": {
@@ -900,7 +864,7 @@
     },
     {
       "parameters": {
-        "content": "## 1. 收訊與驗證\n\nLINE → Webhook → HMAC-SHA256 簽章驗證 → 先回 200 再處理。\n\n**要填進 LINE Console 的網址**：\n`https://<你的網域>/webhook/line`\n\nChannel Secret 來自 docker-compose 的環境變數 `LINE_CHANNEL_SECRET`，不存在工作流裡。",
+        "content": "## 1. 收訊與驗證\n\nLINE → Webhook（收到立即回 200，符合 LINE 回應時限）→ HMAC-SHA256 簽章驗證 → 驗證失敗就中止，不處理內容。\n\n**要填進 LINE Console 的網址**：\n`https://<你的網域>/webhook/line`\n\nChannel Secret 來自 docker-compose 的環境變數 `LINE_CHANNEL_SECRET`，不存在工作流裡。",
         "height": 240,
         "width": 820,
         "color": 4
@@ -990,29 +954,12 @@
       "main": [
         [
           {
-            "node": "回應 LINE｜200",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "回應 LINE｜401",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "回應 LINE｜200": {
-      "main": [
-        [
-          {
             "node": "展開訊息事件",
             "type": "main",
             "index": 0
           }
-        ]
+        ],
+        []
       ]
     },
     "展開訊息事件": {

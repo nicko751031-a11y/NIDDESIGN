@@ -381,6 +381,8 @@ https://n8n.niddesignlab.com/webhook/line
 填完按 **Verify**。應該回 `Success`。
 
 > Verify 送的是空的 `events: []`，工作流會回 200 但不做任何事，這是正常的。
+>
+> **若 Verify 回「A timeout occurred」**：Webhook 節點的 Respond 必須是 **Immediately**（收到就回 200，處理在背景進行）。若設成「Using Respond to Webhook node」，回應會等簽章驗證的 Code 節點跑完才送出，在 Railway 的小容器上常超過 Verify 的時限。工作流 JSON 已採用 Immediately 模式；就算 Verify 偶爾逾時，實際訊息推送仍會正常送達（Use webhook 開著即可），且 redelivery 會補送。
 
 ### 8.2 LINE Official Account Manager
 
