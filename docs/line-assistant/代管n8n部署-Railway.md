@@ -190,14 +190,14 @@ NOTION_DB_MESSAGES=687c5006-5421-4692-a9d9-5ff390a9c55a
 
 貼完按 **Save / Update Variables**。
 
-> **請把第 4、6、7 節（含區域與 Volume）都做完再按 `Deploy`**，一次套用所有變更。
+> **請把第 4、6、7 節都做完再按 `Deploy`**，一次套用所有變更。
 >
 > 特別是 `N8N_ENCRYPTION_KEY` **必須在第一次 Deploy 之前就設好**（原因見第 5 節），
 > 否則要把 Volume 刪掉重來。
 
 ---
 
-## 7. 選區域，然後加 Volume
+## 7. 選區域（不要加 Volume）
 
 ### 7.1 先改區域
 
@@ -208,30 +208,41 @@ Railway 預設可能給你 US West 或 EU West。新加坡離 LINE 的日本機�
 Webhook 往返與你自己操作編輯器都會比較順。選不到新加坡就退而求其次選 **US West**，
 不要留在 EU West。
 
-> ⚠️ **一定要在掛 Volume 之前改。** Volume 會綁定區域，
-> 掛上去之後再改區域會被擋下來，得先卸載 Volume。
-
 > 同一頁的 **Replica Limits**（CPU / Memory 上限）不用動，
 > 那是上限不是保留量，Railway 依實際用量計費。
 
-### 7.2 掛 Volume
+### 7.2 ⚠️ 不要幫 n8n 掛 Volume
 
-n8n 有些檔案要放在磁碟上（暫存的附件、內部設定）。沒有 Volume 的話每次重啟都會清空。
+**這一點很重要，掛了會啟動失敗。**
 
-**Volume 不在 Settings 裡**，要從專案畫布操作：
+n8n 官方映像檔以 `node` 這個使用者執行，但 Railway 掛上來的 Volume 屬於 root，
+n8n 寫不進 `/home/node/.n8n/config`，容器會直接崩潰：
 
-1. 關掉服務面板回到專案畫布
-2. **在 `n8n` 服務卡片上按右鍵** → **Attach Volume**
-   （找不到的話：畫布右上 `+ Add` 找 **Volume**，或按 `Ctrl + K` 打 `volume`）
-3. **Mount path** 填：
+```text
+Error: EACCES: permission denied, open '/home/node/.n8n/config'
+    at InstanceSettings.save (...)
+```
 
-   ```text
-   /home/node/.n8n
-   ```
+**而且這套設定本來就不需要 Volume：**
 
-4. 大小用預設即可
+| 要保存的東西 | 實際存在哪 |
+|---|---|
+| 工作流、Credential、執行紀錄 | **Postgres**（它自己有 volume） |
+| 加密金鑰 | **環境變數** `N8N_ENCRYPTION_KEY` |
+| 附件暫存檔 | 容器內即可 |
 
-掛好之後，`n8n` 卡片下方會多一條 volume，就像 `Postgres` 卡片下方的 `postgres-volume` 那樣。
+附件那條值得說明：工作流是「從 LINE 下載 → 上傳 Dropbox」**在同一次執行內完成**，
+暫存檔不需要跨重啟保存。容器重啟時若有執行到一半的附件會遺失，
+但那筆執行本來就失敗了，有沒有 Volume 都一樣。
+
+沒有 Volume 時 `/home/node/.n8n` 是容器自己的可寫層、屬於 `node` 使用者，寫入正常。
+
+> **已經掛上去了怎麼辦**：專案畫布點 `n8n-volume` → **Delete Volume**，再 Deploy 一次即可。
+> 此時還沒有任何資料，不會有損失。
+
+> 真的需要持久磁碟的話（例如日後要放自訂節點），得自己建一個
+> `FROM n8nio/n8n` + `USER root` 的 Dockerfile 從 GitHub 部署。
+> 本專案用不到。
 
 ---
 
@@ -248,6 +259,7 @@ n8n 有些檔案要放在磁碟上（暫存的附件、內部設定）。沒有 
 
 | 日誌訊息 | 原因 | 解法 |
 |---|---|---|
+| `EACCES: permission denied, open '/home/node/.n8n/config'` | **幫 n8n 掛了 Volume**（見 7.2） | 刪掉 `n8n-volume` 再 Deploy |
 | `ECONNREFUSED` / `getaddrinfo` 相關 | Postgres 變數對不上 | 確認資料庫服務名稱是 `Postgres`，且第 6 節那六行 `DB_*` 有正確貼上 |
 | `no pg_hba.conf entry` / 出現 `SSL` 字樣 | 資料庫要求 SSL 連線 | 在 Variables 補上這兩行後重新部署：<br>`DB_POSTGRESDB_SSL_ENABLED=true`<br>`DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false` |
 | `Application failed to respond` | Railway 對到錯的 port | Settings → Networking，把 port 改成 `5678` |
