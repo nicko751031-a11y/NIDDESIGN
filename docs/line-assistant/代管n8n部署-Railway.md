@@ -43,6 +43,9 @@ Railway 是用量計費，n8n 這種長時間掛著但負載很輕的服務，�
 1. 開 <https://railway.com/> → **Login** → 用 **GitHub 登入**（最快）
 2. 進入後到 **Account Settings → Plans**，升級到 **Hobby**（US$5／月起）
 
+> ⚠️ Railway 內建的 **AI Agent（右側面板）會另外計費**。
+> 底下的步驟自己點就好，不需要用 Agent。
+
 ---
 
 ## 2. 建立專案與資料庫
@@ -63,10 +66,13 @@ Railway 是用量計費，n8n 這種長時間掛著但負載很輕的服務，�
 3. 進入該服務 → **Settings → Source**，把映像檔設成：
 
    ```text
-   docker.n8n.io/n8nio/n8n:latest
+   n8nio/n8n:latest
    ```
 
 4. 服務名稱可改成 `n8n`
+
+> 這是 Docker Hub 上的官方映像檔。n8n 自家的 `docker.n8n.io/n8nio/n8n:latest`
+> 內容相同，但 Docker Hub 這個路徑在 Railway 上解析最穩。
 
 ---
 
@@ -205,6 +211,7 @@ n8n 有些檔案要放在磁碟上（暫存的附件、內部設定）。沒有 
 | 日誌訊息 | 原因 | 解法 |
 |---|---|---|
 | `ECONNREFUSED` / `getaddrinfo` 相關 | Postgres 變數對不上 | 確認資料庫服務名稱是 `Postgres`，且第 6 節那六行 `DB_*` 有正確貼上 |
+| `no pg_hba.conf entry` / 出現 `SSL` 字樣 | 資料庫要求 SSL 連線 | 在 Variables 補上這兩行後重新部署：<br>`DB_POSTGRESDB_SSL_ENABLED=true`<br>`DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false` |
 | `Application failed to respond` | Railway 對到錯的 port | Settings → Networking，把 port 改成 `5678` |
 | 一直重啟 | `N8N_ENCRYPTION_KEY` 沒填或格式怪 | 重新產生一組純英數字串再填 |
 | 開得起來但畫面怪怪的、登入後跳回 | `WEBHOOK_URL` / `N8N_EDITOR_BASE_URL` 少了 `https://` 或結尾斜線 | 依第 6 節格式修正 |
