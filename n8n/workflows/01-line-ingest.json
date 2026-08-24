@@ -106,7 +106,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ filter: { and: [ { property: '群組 ID', rich_text: { equals: $json.groupId } }, { property: '註冊狀態', select: { equals: '已登錄' } } ] }, page_size: 1 }) }}"
+        "jsonBody": "={{ JSON.stringify({ filter: { property: '群組 ID', rich_text: { equals: $json.groupId } }, page_size: 10 }) }}"
       },
       "name": "Notion｜查詢群組白名單",
       "type": "n8n-nodes-base.httpRequest",
@@ -140,7 +140,7 @@
           "conditions": [
             {
               "id": "5a63d643-8497-44d7-b10c-9ea7da8baed8",
-              "leftValue": "={{ ($json.results || []).length > 0 }}",
+              "leftValue": "={{ ($json.results || []).some(r => r.properties['註冊狀態']?.select?.name === '已登錄') }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -925,6 +925,42 @@
         540
       ],
       "id": "d36ea6bc-5fbd-4f13-82af-e8aae0b67ae1"
+    },
+    {
+      "id": "acb94f85-f114-41de-8321-8ac9c8d95d97",
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "82211753-a591-41c8-ba42-0ff431354f79",
+              "leftValue": "={{ ($json.results || []).length === 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "name": "IF｜尚未建檔",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1160,
+        380
+      ],
+      "notes": "群組 ID 在 02 已有任何一列（待確認／停用）就不再重複建立。"
     }
   ],
   "connections": {
@@ -995,7 +1031,7 @@
         ],
         [
           {
-            "node": "LINE｜取得群組名稱",
+            "node": "IF｜尚未建檔",
             "type": "main",
             "index": 0
           }
@@ -1237,6 +1273,18 @@
             "index": 0
           }
         ]
+      ]
+    },
+    "IF｜尚未建檔": {
+      "main": [
+        [
+          {
+            "node": "LINE｜取得群組名稱",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     }
   },
