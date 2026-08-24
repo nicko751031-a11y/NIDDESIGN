@@ -117,8 +117,11 @@ n8n（自架於你的 VPS）
 `niddesignlab.com` 的 DNS 由 **WordPress.com** 管理（NS 為 `ns1/ns2/ns3.wordpress.com`）：
 <https://wordpress.com/domains/manage/niddesignlab.com/dns/niddesignlab.com>
 
-- 頁面上已有 `line` 的 A 記錄，照它的樣子加一筆 `n8n` 即可
-- **不要動既有記錄**，否則官網或舊系統會掛
+- 按右上 **新增記錄** → TYPE 選 **A**（不是 CNAME）、名稱填 `n8n`、內容填 VPS IP
+- 現有的 `line` 是 **CNAME** 指向 `custom-domains.chatgpt.site`（舊系統託管在 OpenAI Sites），
+  **不要照它的型別做**
+- **不要動既有記錄**（`A @`、`CNAME www`、`CNAME line`、`MX @`、`wpcloud*._domainkey`），
+  否則官網、舊系統或公司信箱 `info@niddesignlab.com` 會掛
 - WordPress.com 的 TTL 固定 3600 秒，生效可能要等最多 1 小時
 
 用這個指令確認生效：

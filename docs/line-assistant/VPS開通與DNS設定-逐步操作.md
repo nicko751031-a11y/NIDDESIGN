@@ -121,17 +121,27 @@ Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
 2. 點 **`niddesignlab.com`**
 3. 找 **DNS 記錄 / DNS records**
    （直接網址：`https://wordpress.com/domains/manage/niddesignlab.com/dns/niddesignlab.com`）
-4. 頁面上應該已經有一筆 `line` 的 A 記錄（舊系統用的）。**照它的樣子再加一筆**：
+4. 右上角按 **新增記錄**，填：
 
    | 欄位 | 填什麼 |
    |---|---|
-   | Type | **A** |
-   | Name | **`n8n`** ← 只填 `n8n` |
-   | Points To | 你的 VPS IP |
+   | TYPE | **A** ← 不是 CNAME |
+   | 名稱 | **`n8n`** ← 只填 `n8n`，不要填完整網域 |
+   | 欄位內容／指向 | 你的 VPS IP（例如 `45.32.10.20`） |
 
-5. 按 **Add DNS record**
+5. 儲存
 
-> **不要動既有的記錄**，特別是主網域的 A 記錄與 `line` 那筆——動到會讓官網或舊系統掛掉。只新增 `n8n` 這一筆。
+> ⚠️ **不要照 `line` 那筆的樣子做。** 現有的 `line` 是 **CNAME** 指向
+> `custom-domains.chatgpt.site`（舊系統託管在 OpenAI Sites）。
+> n8n 是自己的 VPS，要用 **A 記錄指向 IP**，型別不同。
+
+> ⚠️ **不要動任何既有記錄。** 特別是：
+> - `A @`（主網站）
+> - `CNAME www`（www 導向）
+> - `CNAME line`（舊 LINE 系統）
+> - `MX @`、`CNAME wpcloud1/2._domainkey`（公司信箱 `info@niddesignlab.com`）
+>
+> 只**新增** `n8n` 這一筆。改到上面任何一筆都會讓官網、舊系統或公司信箱掛掉。
 
 ⚠️ **WordPress.com 的 TTL 固定 3600 秒（1 小時）**，不像 Cloudflare 可以設 60 秒。
 所以新記錄可能要等最多 1 小時才生效，**請務必等 `nslookup` 查得到才跑 `install.sh`**。
@@ -259,7 +269,8 @@ bash install.sh
 | 警告 | 意思 | 怎麼辦 |
 |---|---|---|
 | `還沒有 DNS 記錄` | 第 3 節沒做或還沒生效 | 等生效後重跑 `bash install.sh` |
-| `DNS 指向 X，但本機對外 IP 是 Y` | A 記錄填錯 IP，或 Cloudflare 開了橘雲 | 回第 3 節修正 |
+| `DNS 指向 X，但本機對外 IP 是 Y` | A 記錄填錯 IP | 回第 3 節修正 |
+| `還沒有 DNS 記錄`，但你確定加過了 | 型別加成 CNAME 而不是 A | 刪掉重加一筆 **A** 記錄 |
 | `LINE_CHANNEL_SECRET 尚未填寫` | 5.3 漏了 | 之後補填再 `docker compose up -d` |
 
 看到這個畫面就成功了：
