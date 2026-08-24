@@ -107,6 +107,14 @@ Railway 是用量計費，n8n 這種長時間掛著但負載很輕的服務，�
 > ⚠️ **這組金鑰請立刻存進密碼管理器。** n8n 用它加密所有 Credential，
 > 遺失的話 LINE Token、Notion Token、Anthropic Key、Dropbox 授權全部解不開，只能重建。
 
+> ⚠️ **這個變數一定要在「第一次 Deploy 之前」就填好。**
+> n8n 首次啟動時若讀不到 `N8N_ENCRYPTION_KEY`，會自己隨機產生一把並寫進 Volume
+> 的 `config` 檔。之後你再填自己的金鑰，兩者對不上，n8n 會報
+> `Mismatching encryption keys` 拒絕啟動。
+>
+> 已經發生的話：把 n8n 服務的 Volume 刪掉重建（此時還沒有任何 Credential，
+> 不會損失資料），或用 Railway 的 Console 刪掉 `/home/node/.n8n/config` 再重啟。
+
 ---
 
 ## 6. 填入環境變數（最關鍵的一步）
@@ -182,8 +190,10 @@ NOTION_DB_MESSAGES=687c5006-5421-4692-a9d9-5ff390a9c55a
 
 貼完按 **Save / Update Variables**。
 
-> **建議把第 4、6、7 節都做完再按一次 `Deploy`**，一次套用所有變更。
-> 分次部署不會壞掉，只是會多幾輪重啟。
+> **請把第 4、6、7 節都做完再按 `Deploy`**，一次套用所有變更。
+>
+> 特別是 `N8N_ENCRYPTION_KEY` **必須在第一次 Deploy 之前就設好**（原因見第 5 節），
+> 否則要把 Volume 刪掉重來。
 
 ---
 
@@ -219,6 +229,7 @@ n8n 有些檔案要放在磁碟上（暫存的附件、內部設定）。沒有 
 | `no pg_hba.conf entry` / 出現 `SSL` 字樣 | 資料庫要求 SSL 連線 | 在 Variables 補上這兩行後重新部署：<br>`DB_POSTGRESDB_SSL_ENABLED=true`<br>`DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false` |
 | `Application failed to respond` | Railway 對到錯的 port | Settings → Networking，把 port 改成 `5678` |
 | 一直重啟 | `N8N_ENCRYPTION_KEY` 沒填或格式怪 | 重新產生一組純英數字串再填 |
+| `Mismatching encryption keys` | 首次部署時沒設金鑰，n8n 自己產生了一把 | 刪掉 n8n 服務的 Volume 後重建再部署（此時尚無 Credential，不會損失資料） |
 | 開得起來但畫面怪怪的、登入後跳回 | `WEBHOOK_URL` / `N8N_EDITOR_BASE_URL` 少了 `https://` 或結尾斜線 | 依第 6 節格式修正 |
 
 ---
