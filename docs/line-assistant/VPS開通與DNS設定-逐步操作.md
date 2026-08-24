@@ -23,28 +23,24 @@
 
 ---
 
-## 1. 先確認 DNS 管理在哪裡（1 分鐘）
+## 1. DNS 管理位置（已確認）
 
-在 Windows 按 `Win` 鍵，輸入 `powershell`，開啟 **Windows PowerShell**，貼上：
+2026-08-24 實測結果：
 
 ```powershell
-nslookup -type=NS niddesignlab.com
+PS> nslookup -type=NS niddesignlab.com
+
+niddesignlab.com    nameserver = ns1.wordpress.com
+niddesignlab.com    nameserver = ns2.wordpress.com
+niddesignlab.com    nameserver = ns3.wordpress.com
 ```
 
-看回傳的 `nameserver`，對照下表就知道要去哪裡設定：
+**`niddesignlab.com` 的 DNS 由 WordPress.com 管理。** 第 3 節會在那裡加記錄。
 
-| 回傳內容包含 | DNS 管理在 | 設定位置 |
-|---|---|---|
-| `ns*.cloudflare.com` | **Cloudflare** | dash.cloudflare.com → 選網域 → DNS |
-| `domaincontrol.com` | GoDaddy | GoDaddy → 我的網域 → DNS |
-| `ns*.gandi.net` | Gandi | Gandi → Domain → DNS Records |
-| `ns*.hinet.net` | 中華電信 HiNet | HiNet 網域管理 |
-| `dns*.name-services.com` | Enom／台灣代理商 | 該代理商後台 |
-| 其他 | 就是那家業者 | — |
+> 這對我們是好事：WordPress.com 沒有 Cloudflare 那種「橘色雲朵 Proxy」機制，
+> 不會改寫請求內容，所以憑證簽發與 LINE 簽章驗證都少一個坑。
 
-**把結果記下來，第 3 節會用到。**
-
-> 如果你的主網站 `niddesignlab.com` 是 WordPress，`line.niddesignlab.com` 之前也是在這裡設的，那位置就跟上次一樣。
+> 日後若把 NS 換到別家（Cloudflare、GoDaddy…），重跑上面那行指令就知道新位置。
 
 ---
 
@@ -119,15 +115,26 @@ Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
 | 值 Value／指向 Points to | 你的 VPS IP（例如 `45.32.xxx.xxx`） |
 | TTL | Auto／自動／600 |
 
-### 如果是 Cloudflare（最常見）
+### WordPress.com 的實際操作（你的情況）
 
-1. <https://dash.cloudflare.com/> → 選 `niddesignlab.com`
-2. 左側 **DNS** → **Records** → **Add record**
-3. Type `A`、Name `n8n`、IPv4 address 填 VPS IP
-4. **Proxy status 一定要點成灰色雲朵「DNS only」** ⚠️
-5. **Save**
+1. 開 <https://wordpress.com/domains/manage> 並登入
+2. 點 **`niddesignlab.com`**
+3. 找 **DNS 記錄 / DNS records**
+   （直接網址：`https://wordpress.com/domains/manage/niddesignlab.com/dns/niddesignlab.com`）
+4. 頁面上應該已經有一筆 `line` 的 A 記錄（舊系統用的）。**照它的樣子再加一筆**：
 
-> **灰雲這件事非常重要。** 橘色雲朵（Proxied）會讓 Caddy 拿不到 Let's Encrypt 憑證，而且 Cloudflare 會改寫請求內容，導致 LINE 的簽章驗證永遠失敗。這是最容易踩的坑。
+   | 欄位 | 填什麼 |
+   |---|---|
+   | Type | **A** |
+   | Name | **`n8n`** ← 只填 `n8n` |
+   | Points To | 你的 VPS IP |
+
+5. 按 **Add DNS record**
+
+> **不要動既有的記錄**，特別是主網域的 A 記錄與 `line` 那筆——動到會讓官網或舊系統掛掉。只新增 `n8n` 這一筆。
+
+⚠️ **WordPress.com 的 TTL 固定 3600 秒（1 小時）**，不像 Cloudflare 可以設 60 秒。
+所以新記錄可能要等最多 1 小時才生效，**請務必等 `nslookup` 查得到才跑 `install.sh`**。
 
 ### 驗證是否生效
 
@@ -358,7 +365,7 @@ cd /opt/niddesign/infra/n8n && docker compose logs --tail=50 caddy
 | `no valid A/AAAA records` | DNS 沒指過來 | 回第 3 節 |
 | `timeout` / `connection refused` during challenge | 80 port 被擋 | `ufw status` 確認 80 是 ALLOW |
 | `too many certificates already issued` | 短時間重試太多次，被 Let's Encrypt 限流 | 等 1 小時後再試，期間不要重複重啟 |
-| 一直沒有憑證相關訊息 | Cloudflare 橘雲沒關 | 回第 3 節改成 DNS only |
+| 一直沒有憑證相關訊息 | DNS 還沒生效（WordPress.com TTL 1 小時） | 等 `nslookup` 查得到後 `docker compose restart caddy` |
 
 ### `docker compose ps` 有服務是 `Restarting`
 
