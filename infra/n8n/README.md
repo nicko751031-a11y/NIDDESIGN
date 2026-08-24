@@ -2,6 +2,10 @@
 
 給川果設計 LINE 助理系統使用的 n8n 部署設定：n8n + PostgreSQL + Caddy（自動 HTTPS）。
 
+> **這是「自架 VPS」路線。** 不想管伺服器的話改用代管服務，見
+> [`代管n8n部署-Railway.md`](../../docs/line-assistant/代管n8n部署-Railway.md)，
+> 那條路不需要本目錄的任何檔案。
+
 完整步驟見 [`docs/line-assistant/第一步-LINE串接n8n-建置指南.md`](../../docs/line-assistant/第一步-LINE串接n8n-建置指南.md)。
 第一次開機器、設 DNS 的逐步操作見 [`VPS開通與DNS設定-逐步操作.md`](../../docs/line-assistant/VPS開通與DNS設定-逐步操作.md)。
 

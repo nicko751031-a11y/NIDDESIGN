@@ -100,11 +100,27 @@ n8n（自架於你的 VPS）
 
 ---
 
-## 4. 步驟一：VPS 與 DNS
+## 4. 步驟一：把 n8n 跑起來
 
-> **沒有伺服器經驗？** 這一節是摘要。
-> 逐步的點擊級操作（選哪家 VPS、Windows 怎麼 SSH、Cloudflare 怎麼設、卡住怎麼辦）
-> 請看 [`VPS開通與DNS設定-逐步操作.md`](VPS開通與DNS設定-逐步操作.md)。
+**有兩條路可以選，擇一即可。功能完全相同，工作流 JSON 也一樣。**
+
+| | A. 代管 n8n（Railway） | B. 自架 VPS |
+|---|---|---|
+| 你要做的事 | 網頁上點一點、填環境變數 | 開 VPS、SSH、Docker、設 DNS |
+| 時間 | 20–30 分鐘 | 40–60 分鐘 |
+| 月費（約） | NT$160–500 | NT$700 |
+| HTTPS 憑證 | 自動 | Caddy 自動（需先設好 DNS） |
+| 需要加 DNS 記錄嗎 | **不用**（用它給的網址） | 要 |
+| 備份 | 平台自動 | 自己跑 `backup.sh` |
+| 網址 | `xxx.up.railway.app` | `n8n.niddesignlab.com` |
+
+**沒有伺服器管理經驗的話選 A。** 兩者都不影響後續步驟，
+只有「Webhook URL」與「Dropbox Redirect URI」要換成對應的網址。
+
+- **A（建議）** → [`代管n8n部署-Railway.md`](代管n8n部署-Railway.md)，做完接回本文件第 6 節
+- **B** → [`VPS開通與DNS設定-逐步操作.md`](VPS開通與DNS設定-逐步操作.md)，或照下面 4.1–4.3 的摘要
+
+以下 4.1–4.3 是 **B（自架 VPS）** 的摘要。選 A 的話請直接跳到第 6 節。
 
 ### 4.1 設定 DNS
 
@@ -283,6 +299,7 @@ sudo crontab -e
    ```text
    https://n8n.niddesignlab.com/rest/oauth2-credential/callback
    ```
+   用 Railway 的話改成 `https://<你的Railway網址>/rest/oauth2-credential/callback`
 7. 複製 `App key` 與 `App secret`
 
 > **順序很重要**：一定要先在 Permissions 按 Submit，再回 n8n 授權。順序反了會拿到權限不足的 token，上傳時報 `missing_scope`。
@@ -353,7 +370,7 @@ https://n8n.niddesignlab.com/webhook/line
 
 | 設定 | 值 |
 |---|---|
-| Webhook URL | `https://n8n.niddesignlab.com/webhook/line` |
+| Webhook URL | `https://n8n.niddesignlab.com/webhook/line`<br>（用 Railway 的話填 `https://<你的Railway網址>/webhook/line`） |
 | Use webhook | **開啟** |
 | Webhook redelivery | **開啟** |
 | Error statistics aggregation | 開啟 |

@@ -4,6 +4,10 @@
 
 完整建置步驟見 [`docs/line-assistant/第一步-LINE串接n8n-建置指南.md`](../docs/line-assistant/第一步-LINE串接n8n-建置指南.md)。
 
+**這些工作流需要完整的自架版 n8n**（要用到 `$env` 與 Code 節點的 `require('crypto')`），
+在 n8n Cloud 上跑不動。用 [Railway 代管](../docs/line-assistant/代管n8n部署-Railway.md)
+或自架都可以，兩者都是完整版。
+
 ## 工作流清單
 
 | 檔案 | 名稱 | 用途 |
@@ -43,7 +47,7 @@ Webhook → 驗證簽章 → 回應 200 → 展開事件
 
 ## 需要的環境變數
 
-由 `infra/n8n/.env` 提供，工作流用 `$env.XXX` 讀取：
+自架版由 `infra/n8n/.env` 提供，Railway 版在服務的 Variables 分頁設定。工作流用 `$env.XXX` 讀取：
 
 | 變數 | 必要 | 用途 |
 |---|---|---|
