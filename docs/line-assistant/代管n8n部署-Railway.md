@@ -76,20 +76,21 @@ Railway 是用量計費，n8n 這種長時間掛著但負載很輕的服務，�
 
 ---
 
-## 4. 先產生網址（環境變數會用到）
+## 4. 設定網址
 
 1. 在 n8n 服務裡 → **Settings → Networking**
 2. **Public Networking** → 按 **Generate Domain**
 3. 若它問 **port**，填 **`5678`**
-4. 會得到類似這樣的網址，**複製起來**：
 
-   ```text
-   n8n-production-a1b2.up.railway.app
-   ```
+畫面會顯示 **「Public domain will be generated」**——這是正常的，
+**網址要等按下 Deploy 之後才會真的產生**。
 
-> 這個網址就是你之後登入 n8n 的地方，也是 LINE Webhook 要指到的地方。
-> 不好記沒關係，加到書籤即可；LINE 不在乎網址好不好看。
-> 日後想換成 `n8n.niddesignlab.com` 也可以，Railway 支援自訂網域，再加一筆 DNS 記錄就好。
+**你不需要事先知道網址是什麼。** 第 6 節的環境變數用 Railway 的內建變數
+`${{RAILWAY_PUBLIC_DOMAIN}}` 自我引用，部署時會自動代換成實際網址。
+
+> 部署完成後回到 **Settings → Networking** 就看得到實際網址，
+> 類似 `n8n-production-a1b2.up.railway.app`。加到書籤即可；
+> 不好記沒關係，LINE 不在乎網址好不好看。
 
 ---
 
@@ -112,7 +113,7 @@ Railway 是用量計費，n8n 這種長時間掛著但負載很輕的服務，�
 
 1. n8n 服務 → **Variables** 分頁
 2. 找 **Raw Editor**（通常在右上角的 `⋮` 或 `RAW Editor` 按鈕）
-3. **整段貼上**下面內容，然後改掉三個地方：
+3. **整段貼上**下面內容，然後只改**兩個**地方（網址那三行不用動）：
 
 ```ini
 DB_TYPE=postgresdb
@@ -122,9 +123,9 @@ DB_POSTGRESDB_DATABASE=${{Postgres.PGDATABASE}}
 DB_POSTGRESDB_USER=${{Postgres.PGUSER}}
 DB_POSTGRESDB_PASSWORD=${{Postgres.PGPASSWORD}}
 
-N8N_HOST=請換成第4節的網址
-WEBHOOK_URL=https://請換成第4節的網址/
-N8N_EDITOR_BASE_URL=https://請換成第4節的網址/
+N8N_HOST=${{RAILWAY_PUBLIC_DOMAIN}}
+WEBHOOK_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}/
+N8N_EDITOR_BASE_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}/
 N8N_PORT=5678
 N8N_PROTOCOL=https
 N8N_PROXY_HOPS=1
@@ -152,22 +153,23 @@ NOTION_DB_FILES=32903708-fccf-48a0-b219-767da737f0ea
 NOTION_DB_MESSAGES=687c5006-5421-4692-a9d9-5ff390a9c55a
 ```
 
-### 要改的三個地方
+### 只有這兩個要你填
 
 | 變數 | 填什麼 | 去哪拿 |
 |---|---|---|
-| `N8N_HOST` / `WEBHOOK_URL` / `N8N_EDITOR_BASE_URL` | 第 4 節產生的網址 | Railway |
 | `N8N_ENCRYPTION_KEY` | 第 5 節產生的隨機字串 | PowerShell |
 | `LINE_CHANNEL_SECRET` | Channel secret | [LINE Console → Basic settings](https://developers.line.biz/console/channel/2010874992/basic-info) |
 
-注意 `N8N_HOST` **不含** `https://`，而 `WEBHOOK_URL` 與 `N8N_EDITOR_BASE_URL`
-**要含** `https://` 且**結尾有斜線**。例如：
+其餘**原封不動**，包括這兩種 Railway 語法：
 
-```ini
-N8N_HOST=n8n-production-a1b2.up.railway.app
-WEBHOOK_URL=https://n8n-production-a1b2.up.railway.app/
-N8N_EDITOR_BASE_URL=https://n8n-production-a1b2.up.railway.app/
-```
+- `${{Postgres.PGHOST}}` 等六行 → 自動帶入資料庫連線資訊
+- `${{RAILWAY_PUBLIC_DOMAIN}}` → 自動帶入本服務的公開網址，
+  日後換成自訂網域也會自動跟著變，不用回來改
+
+> 若部署後發現 n8n 的網址怪怪的（例如登入後跳回登入頁），
+> 到 **Variables** 確認 `${{RAILWAY_PUBLIC_DOMAIN}}` 有被代換成實際網址；
+> 沒有的話就手動把那三行改成實際網址：
+> `N8N_HOST` **不含** `https://`，另外兩個**要含** `https://` 且**結尾有斜線**。
 
 ### 這幾個變數為什麼重要
 
@@ -178,7 +180,10 @@ N8N_EDITOR_BASE_URL=https://n8n-production-a1b2.up.railway.app/
 | `N8N_DEFAULT_BINARY_DATA_MODE=filesystem` | LINE 影片可能很大，走磁碟而非記憶體 |
 | `EXECUTIONS_DATA_MAX_AGE=336` | 執行紀錄只留 14 天，避免資料庫（與帳單）無限長大 |
 
-貼完按 **Save / Update Variables**，Railway 會自動重新部署。
+貼完按 **Save / Update Variables**。
+
+> **建議把第 4、6、7 節都做完再按一次 `Deploy`**，一次套用所有變更。
+> 分次部署不會壞掉，只是會多幾輪重啟。
 
 ---
 
