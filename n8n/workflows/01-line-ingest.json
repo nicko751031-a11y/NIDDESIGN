@@ -672,8 +672,7 @@
         "options": {
           "timeout": 180000
         },
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "dropboxOAuth2Api",
+        "authentication": "genericCredentialType",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -689,7 +688,8 @@
         },
         "sendBody": true,
         "contentType": "binaryData",
-        "inputDataFieldName": "data"
+        "inputDataFieldName": "data",
+        "genericAuthType": "oAuth2Api"
       },
       "name": "Dropbox｜上傳檔案",
       "type": "n8n-nodes-base.httpRequest",
@@ -699,9 +699,9 @@
         320
       ],
       "credentials": {
-        "dropboxOAuth2Api": {
-          "id": "DROPBOX_OAUTH",
-          "name": "Dropbox OAuth2"
+        "oAuth2Api": {
+          "id": "Skkg71dLFdwF05xt",
+          "name": "Dropbox OAuth2 v2"
         }
       },
       "retryOnFail": true,
@@ -715,8 +715,7 @@
         "method": "POST",
         "url": "https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings",
         "options": {},
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "dropboxOAuth2Api",
+        "authentication": "genericCredentialType",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -728,7 +727,8 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ path: $json.path_display }) }}"
+        "jsonBody": "={{ JSON.stringify({ path: $json.path_display }) }}",
+        "genericAuthType": "oAuth2Api"
       },
       "name": "Dropbox｜建立分享連結",
       "type": "n8n-nodes-base.httpRequest",
@@ -738,9 +738,9 @@
         320
       ],
       "credentials": {
-        "dropboxOAuth2Api": {
-          "id": "DROPBOX_OAUTH",
-          "name": "Dropbox OAuth2"
+        "oAuth2Api": {
+          "id": "Skkg71dLFdwF05xt",
+          "name": "Dropbox OAuth2 v2"
         }
       },
       "onError": "continueRegularOutput",
