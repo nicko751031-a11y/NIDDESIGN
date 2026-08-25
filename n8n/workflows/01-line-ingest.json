@@ -652,7 +652,7 @@
     },
     {
       "parameters": {
-        "jsCode": "\n// 決定檔案在 Dropbox 的存放路徑、檔案類型與用途分類。\n// 本節點以「每筆項目執行一次」模式運作，並把 binary 原封不動往下傳。\nconst d = $('整理訊息基本欄位').item.json;\nconst bin = $input.item.binary?.data || {};\n\nconst ROOT = '/NIDDESIGN-LINE助理';\n\n// Dropbox 不接受 / \\ : ? * < > \" | 與控制字元，開頭結尾也不能是空白或句點\nconst safe = (s) =>\n  String(s || '')\n    .split('')\n    .filter((ch) => ch.charCodeAt(0) > 31)\n    .join('')\n    .replace(/[\\/\\\\:?*<>\"|]/g, '_')\n    .replace(/^[.\\s]+|[.\\s]+$/g, '')\n    .slice(0, 120) || '未命名';\n\n// --- 副檔名 ---\nconst MIME_EXT = {\n  'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif',\n  'image/webp': 'webp', 'image/heic': 'heic',\n  'video/mp4': 'mp4', 'video/quicktime': 'mov',\n  'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/mpeg': 'mp3',\n};\nconst DEFAULT_EXT = { image: 'jpg', video: 'mp4', audio: 'm4a', file: 'bin' };\n\nlet originalName = d.fileName || '';\nlet ext = '';\nif (originalName.includes('.')) {\n  ext = originalName.split('.').pop().toLowerCase();\n} else {\n  ext = MIME_EXT[bin.mimeType] || bin.fileExtension || DEFAULT_EXT[d.messageType] || 'bin';\n}\n\n// --- 台北時間戳，用於檔名與資料夾 ---\nconst parts = new Intl.DateTimeFormat('sv-SE', {\n  timeZone: 'Asia/Taipei',\n  year: 'numeric', month: '2-digit', day: '2-digit',\n  hour: '2-digit', minute: '2-digit', second: '2-digit',\n  hour12: false,\n}).format(new Date(d.timestamp));            // 例：2026-08-22 14:03:51\nconst [datePart, timePart] = parts.split(' ');\nconst yearMonth = datePart.slice(0, 7);       // 2026-08\nconst stamp = `${datePart.replace(/-/g, '')}-${timePart.replace(/:/g, '')}`;\n\n// --- 檔名 ---\nif (!originalName) originalName = `${d.messageType}.${ext}`;\nconst baseName = safe(originalName.replace(/\\.[^.]+$/, ''));\nconst fileName = `${stamp}_${safe(d.displayName)}_${baseName}.${ext}`;\n\n// --- 群組資料夾：附上 Group ID 後 6 碼，避免同名群組互相覆蓋 ---\nconst groupFolder = `${safe(d.groupName)}_${d.groupId.slice(-6)}`;\nconst dropboxPath = `${ROOT}/${groupFolder}/${yearMonth}/${fileName}`;\n\n// --- 檔案類型 ---\nconst TYPE_MAP = [\n  [['jpg','jpeg','png','gif','webp','heic','heif','bmp','tif','tiff'], '照片'],\n  [['mp4','mov','avi','mkv','m4v','3gp','wmv'], '影片'],\n  [['m4a','mp3','wav','aac','ogg','amr'], '音訊'],\n  [['pdf'], 'PDF'],\n  [['dwg','dxf','dwf','rvt','rfa','skp','3ds','max','sat','step','stp','igs','iges'], 'CAD 圖檔'],\n  [['xls','xlsx','xlsm','csv','numbers'], '試算表'],\n  [['doc','docx','ppt','pptx','txt','rtf','pages','key','odt'], '文件'],\n  [['zip','rar','7z','tar','gz'], '壓縮檔'],\n];\nlet fileKind = '其他';\nfor (const [exts, name] of TYPE_MAP) {\n  if (exts.includes(ext)) { fileKind = name; break; }\n}\n\n// --- 用途分類：先用檔名關鍵字猜，猜不到就留給人工 ---\nconst lower = originalName.toLowerCase();\nconst has = (...kw) => kw.some((k) => lower.includes(k));\nlet usage = '待分類';\nif (has('報價', '估價', 'quote', 'quotation')) usage = '報價單';\nelse if (has('合約', '契約', 'contract', '訂單')) usage = '合約';\nelse if (fileKind === 'CAD 圖檔' || has('平面', '立面', '剖面', '施工圖', '圖說', '大樣')) usage = '設計圖';\nelse if (has('完工', '驗收', '交屋')) usage = '完工照';\nelse if (has('材料', '樣品', 'sample', '建材')) usage = '材料樣品';\nelse if (has('現場', '施工', '進度', '缺失')) usage = '施工照片';\n\n// --- Dropbox-API-Arg 是 HTTP header，必須是純 ASCII ---\n// 中文檔名要轉成 \\uXXXX 逸出序列，否則 HTTP 用戶端會拒絕送出這個 header。\nconst asciiEscape = (s) =>\n  s.split('').map((ch) => {\n    const code = ch.charCodeAt(0);\n    return (code >= 32 && code <= 126) ? ch : '\\\\u' + code.toString(16).padStart(4, '0');\n  }).join('');\n\nconst dropboxApiArg = asciiEscape(JSON.stringify({\n  path: dropboxPath,\n  mode: 'add',\n  autorename: true,      // 同名不覆蓋，自動加序號\n  mute: true,\n  strict_conflict: false,\n}));\n\nreturn {\n  json: {\n    ...d,\n    originalFileName: originalName,\n    fileName,\n    ext,\n    fileKind,\n    usage,\n    dropboxPath,\n    dropboxApiArg,\n    fileSizeMB: d.fileSize ? Number((d.fileSize / 1048576).toFixed(3)) : null,\n  },\n  binary: $input.item.binary,    // 保留二進位內容給下一個上傳節點\n};\n",
+        "jsCode": "\n// 決定檔案在 Dropbox 的存放路徑、檔案類型與用途分類。\n// 本節點以「每筆項目執行一次」模式運作，並把 binary 原封不動往下傳。\nconst d = $('整理訊息基本欄位').item.json;\nconst bin = $input.item.binary?.data || {};\nconst vis = $input.item.json || {};   // 影像分析結果（僅照片路徑帶入）\n\nconst ROOT = '/NIDDESIGN-LINE助理';\n\n// Dropbox 不接受 / \\ : ? * < > \" | 與控制字元，開頭結尾也不能是空白或句點\nconst safe = (s) =>\n  String(s || '')\n    .split('')\n    .filter((ch) => ch.charCodeAt(0) > 31)\n    .join('')\n    .replace(/[\\/\\\\:?*<>\"|]/g, '_')\n    .replace(/^[.\\s]+|[.\\s]+$/g, '')\n    .slice(0, 120) || '未命名';\n\n// --- 副檔名 ---\nconst MIME_EXT = {\n  'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif',\n  'image/webp': 'webp', 'image/heic': 'heic',\n  'video/mp4': 'mp4', 'video/quicktime': 'mov',\n  'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/mpeg': 'mp3',\n};\nconst DEFAULT_EXT = { image: 'jpg', video: 'mp4', audio: 'm4a', file: 'bin' };\n\nlet originalName = d.fileName || '';\nlet ext = '';\nif (originalName.includes('.')) {\n  ext = originalName.split('.').pop().toLowerCase();\n} else {\n  ext = MIME_EXT[bin.mimeType] || bin.fileExtension || DEFAULT_EXT[d.messageType] || 'bin';\n}\n\n// --- 台北時間戳，用於檔名與資料夾 ---\nconst parts = new Intl.DateTimeFormat('sv-SE', {\n  timeZone: 'Asia/Taipei',\n  year: 'numeric', month: '2-digit', day: '2-digit',\n  hour: '2-digit', minute: '2-digit', second: '2-digit',\n  hour12: false,\n}).format(new Date(d.timestamp));            // 例：2026-08-22 14:03:51\nconst [datePart, timePart] = parts.split(' ');\nconst yearMonth = datePart.slice(0, 7);       // 2026-08\nconst stamp = `${datePart.replace(/-/g, '')}-${timePart.replace(/:/g, '')}`;\n\n// --- 檔名 ---\nif (!originalName) originalName = `${d.messageType}.${ext}`;\nconst baseName = safe(originalName.replace(/\\.[^.]+$/, ''));\nconst fileName = `${stamp}_${safe(d.displayName)}_${baseName}.${ext}`;\n\n// --- 群組資料夾：附上 Group ID 後 6 碼，避免同名群組互相覆蓋 ---\nconst groupFolder = `${safe(d.groupName)}_${d.groupId.slice(-6)}`;\nconst dropboxPath = `${ROOT}/${groupFolder}/${yearMonth}/${fileName}`;\n\n// --- 檔案類型 ---\nconst TYPE_MAP = [\n  [['jpg','jpeg','png','gif','webp','heic','heif','bmp','tif','tiff'], '照片'],\n  [['mp4','mov','avi','mkv','m4v','3gp','wmv'], '影片'],\n  [['m4a','mp3','wav','aac','ogg','amr'], '音訊'],\n  [['pdf'], 'PDF'],\n  [['dwg','dxf','dwf','rvt','rfa','skp','3ds','max','sat','step','stp','igs','iges'], 'CAD 圖檔'],\n  [['xls','xlsx','xlsm','csv','numbers'], '試算表'],\n  [['doc','docx','ppt','pptx','txt','rtf','pages','key','odt'], '文件'],\n  [['zip','rar','7z','tar','gz'], '壓縮檔'],\n];\nlet fileKind = '其他';\nfor (const [exts, name] of TYPE_MAP) {\n  if (exts.includes(ext)) { fileKind = name; break; }\n}\n\n// --- 用途分類：先用檔名關鍵字猜，猜不到就留給人工 ---\nconst lower = originalName.toLowerCase();\nconst has = (...kw) => kw.some((k) => lower.includes(k));\nlet usage = '待分類';\nif (has('報價', '估價', 'quote', 'quotation')) usage = '報價單';\nelse if (has('合約', '契約', 'contract', '訂單')) usage = '合約';\nelse if (fileKind === 'CAD 圖檔' || has('平面', '立面', '剖面', '施工圖', '圖說', '大樣')) usage = '設計圖';\nelse if (has('完工', '驗收', '交屋')) usage = '完工照';\nelse if (has('材料', '樣品', 'sample', '建材')) usage = '材料樣品';\nelse if (has('現場', '施工', '進度', '缺失')) usage = '施工照片';\n\n// 照片經視覺分析時，檔名猜不出來就採用 AI 的判斷\nconst VALID_USAGE = ['報價單', '合約', '設計圖', '完工照', '材料樣品', '施工照片'];\nif (usage === '待分類' && VALID_USAGE.includes(vis.visionUsage)) usage = vis.visionUsage;\n\n// --- Dropbox-API-Arg 是 HTTP header，必須是純 ASCII ---\n// 中文檔名要轉成 \\uXXXX 逸出序列，否則 HTTP 用戶端會拒絕送出這個 header。\nconst asciiEscape = (s) =>\n  s.split('').map((ch) => {\n    const code = ch.charCodeAt(0);\n    return (code >= 32 && code <= 126) ? ch : '\\\\u' + code.toString(16).padStart(4, '0');\n  }).join('');\n\nconst dropboxApiArg = asciiEscape(JSON.stringify({\n  path: dropboxPath,\n  mode: 'add',\n  autorename: true,      // 同名不覆蓋，自動加序號\n  mute: true,\n  strict_conflict: false,\n}));\n\nreturn {\n  json: {\n    ...d,\n    originalFileName: originalName,\n    fileName,\n    ext,\n    fileKind,\n    usage,\n    dropboxPath,\n    dropboxApiArg,\n    fileSizeMB: d.fileSize ? Number((d.fileSize / 1048576).toFixed(3)) : null,\n    visionSummary: vis.visionSummary || '',\n    visionText: vis.visionText || '',\n    visionConfidence: vis.visionConfidence ?? null,\n  },\n  binary: $input.item.binary,    // 保留二進位內容給下一個上傳節點\n};\n",
         "mode": "runOnceForEachItem"
       },
       "name": "組出 Dropbox 路徑",
@@ -807,7 +807,7 @@
     },
     {
       "parameters": {
-        "jsCode": "\n// 附件也要在 06｜訊息紀錄 留一筆，讓群組的時間軸完整，\n// 並用「關聯檔案」把這筆訊息接回 05｜檔案索引 的那一列。\nconst d = $('組出檔案索引').item.json;\nconst filePage = $json || {};\n\nconst properties = {\n  '摘要': { title: [{ text: { content: `[${d.fileKind}] ${d.finalName}` } }] },\n  '訊息 ID': { rich_text: [{ text: { content: d.messageId } }] },\n  '群組 ID': { rich_text: [{ text: { content: d.groupId } }] },\n  '群組名稱': { rich_text: [{ text: { content: d.groupName || '' } }] },\n  '發送者': { rich_text: [{ text: { content: d.displayName } }] },\n  '發送者 ID': { rich_text: [{ text: { content: d.userId || '' } }] },\n  '發送時間': { date: { start: d.sentAt } },\n  '訊息類型': { select: { name: d.messageTypeZh } },\n  '內容': { rich_text: [{ text: { content: d.finalPath } }] },\n  '分類': { select: { name: d.usage === '報價單' ? '報價金額' : '一般資訊' } },\n  '優先級': { select: { name: '一般' } },\n  '處理狀態': { select: { name: d.usage === '待分類' ? '待處理' : '已處理' } },\n};\n\nif (d.groupPageId) properties['群組'] = { relation: [{ id: d.groupPageId }] };\nif (d.projectIds?.length) properties['所屬專案'] = { relation: d.projectIds };\nif (filePage.id) properties['關聯檔案'] = { relation: [{ id: filePage.id }] };\n\nreturn {\n  json: {\n    ...d,\n    filePageId: filePage.id || '',\n    notionPayload: {\n      parent: { database_id: $env.NOTION_DB_MESSAGES || '687c5006-5421-4692-a9d9-5ff390a9c55a' },\n      properties,\n    },\n  },\n};\n",
+        "jsCode": "\n// 附件也要在 06｜訊息紀錄 留一筆，讓群組的時間軸完整，\n// 並用「關聯檔案」把這筆訊息接回 05｜檔案索引 的那一列。\nconst d = $('組出檔案索引').item.json;\nconst filePage = $json || {};\n\nconst properties = {\n  '摘要': { title: [{ text: { content: d.visionSummary ? `[${d.fileKind}] ${d.visionSummary}` : `[${d.fileKind}] ${d.finalName}` } }] },\n  '訊息 ID': { rich_text: [{ text: { content: d.messageId } }] },\n  '群組 ID': { rich_text: [{ text: { content: d.groupId } }] },\n  '群組名稱': { rich_text: [{ text: { content: d.groupName || '' } }] },\n  '發送者': { rich_text: [{ text: { content: d.displayName } }] },\n  '發送者 ID': { rich_text: [{ text: { content: d.userId || '' } }] },\n  '發送時間': { date: { start: d.sentAt } },\n  '訊息類型': { select: { name: d.messageTypeZh } },\n  '內容': { rich_text: [{ text: { content: d.finalPath + (d.visionText ? `\\n圖中文字：${d.visionText}` : '') } }] },\n  '分類': { select: { name: d.usage === '報價單' ? '報價金額' : '一般資訊' } },\n  '優先級': { select: { name: '一般' } },\n  '處理狀態': { select: { name: d.usage === '待分類' ? '待處理' : '已處理' } },\n};\n\nif (d.visionConfidence !== null && d.visionConfidence !== undefined) properties['AI 信心值'] = { number: d.visionConfidence };\nif (d.groupPageId) properties['群組'] = { relation: [{ id: d.groupPageId }] };\nif (d.projectIds?.length) properties['所屬專案'] = { relation: d.projectIds };\nif (filePage.id) properties['關聯檔案'] = { relation: [{ id: filePage.id }] };\n\nreturn {\n  json: {\n    ...d,\n    filePageId: filePage.id || '',\n    notionPayload: {\n      parent: { database_id: $env.NOTION_DB_MESSAGES || '687c5006-5421-4692-a9d9-5ff390a9c55a' },\n      properties,\n    },\n  },\n};\n",
         "mode": "runOnceForEachItem"
       },
       "name": "組出附件訊息紀錄",
@@ -961,6 +961,119 @@
         380
       ],
       "notes": "群組 ID 在 02 已有任何一列（待確認／停用）就不再重複建立。"
+    },
+    {
+      "id": "11a043af-9264-49ff-9a03-867b375ea1a3",
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e91973ab-398f-4eaa-a373-a830ca380374",
+              "leftValue": "={{ $('展開訊息事件').item.json.messageType === 'image' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "name": "IF｜需要影像分析",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2620,
+        520
+      ]
+    },
+    {
+      "id": "afb10afa-377b-42ec-b125-7a03e70313fe",
+      "parameters": {
+        "jsCode": "\n// 為照片訊息組出 Claude 視覺分析請求（base64 影像＋結構化輸出 schema）。\n// 分析失敗不阻斷備份流程：任何錯誤都以 visionPayload=null 讓後續節點安全略過。\nconst out = [];\nfor (let i = 0; i < items.length; i++) {\n  let payload = null;\n  try {\n    const mime = items[i].binary?.data?.mimeType || 'image/jpeg';\n    if (mime.startsWith('image/')) {\n      const buf = await this.helpers.getBinaryDataBuffer(i, 'data');\n      if (buf.length <= 4.5 * 1024 * 1024) {\n        const d = $('整理訊息基本欄位').item.json;\n        const context = [\n          `這張照片來自室內設計公司的 LINE 聊天室「${d.groupName || '未知'}」。`,\n          d.focusHint ? `此聊天室的重點：${d.focusHint}` : '',\n        ].filter(Boolean).join('\\n');\n        payload = {\n          model: 'claude-haiku-4-5',\n          max_tokens: 500,\n          output_config: {\n            format: {\n              type: 'json_schema',\n              schema: {\n                type: 'object',\n                additionalProperties: false,\n                required: ['描述', '用途分類', '圖中文字', '信心值'],\n                properties: {\n                  '描述': { type: 'string', description: '一句話具體描述照片內容，30字內' },\n                  '用途分類': { type: 'string', enum: ['施工照片', '完工照', '材料樣品', '設計圖', '報價單', '合約', '待分類'] },\n                  '圖中文字': { type: 'string', description: '照片中可辨識的重要文字（金額、圖號、品牌型號等），無則空字串' },\n                  '信心值': { type: 'number' },\n                },\n              },\n            },\n          },\n          messages: [{\n            role: 'user',\n            content: [\n              { type: 'image', source: { type: 'base64', media_type: mime, data: buf.toString('base64') } },\n              { type: 'text', text: `${context}\\n請分析這張照片並依 schema 回傳 JSON：描述照片內容、判斷用途分類（工地施工過程選「施工照片」；完工或驗收畫面選「完工照」；建材或樣品特寫選「材料樣品」；圖面或圖紙選「設計圖」；報價或估價單據選「報價單」；合約文件選「合約」；無法判斷選「待分類」）、摘錄圖中重要文字。` },\n            ],\n          }],\n        };\n      }\n    }\n  } catch (e) {\n    payload = null;\n  }\n  out.push({ json: { visionPayload: payload }, binary: items[i].binary, pairedItem: { item: i } });\n}\nreturn out;\n",
+        "mode": "runOnceForAllItems"
+      },
+      "name": "組出影像分析請求",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2840,
+        520
+      ]
+    },
+    {
+      "id": "737db5a2-4ee9-4d37-8a4e-dfe97997ed00",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "options": {
+          "timeout": 60000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "structured-outputs-2025-11-13"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.visionPayload) }}"
+      },
+      "name": "AI｜影像分析（Claude）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3060,
+        520
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ANTHROPIC",
+          "name": "Anthropic API Key"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "notes": "照片內容視覺分析（Haiku）。失敗不阻斷備份，僅缺少描述與自動分類。"
+    },
+    {
+      "id": "269de1bc-8573-41fd-8c3a-303e9208f0be",
+      "parameters": {
+        "jsCode": "\n// 解析視覺分析結果；失敗時全部留空，不影響備份。binary 從上游節點原樣取回。\nconst src = $('組出影像分析請求').item;\nconst res = $json;\nlet v = {};\ntry {\n  const tb = (res.content || []).find((c) => c.type === 'text');\n  v = JSON.parse(tb.text);\n} catch (e) { v = {}; }\nif (res.stop_reason === 'refusal') v = {};\nreturn {\n  json: {\n    visionSummary: (v['描述'] || '').slice(0, 100),\n    visionUsage: v['用途分類'] || '',\n    visionText: (v['圖中文字'] || '').slice(0, 500),\n    visionConfidence: typeof v['信心值'] === 'number' ? v['信心值'] : null,\n  },\n  binary: src.binary,\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "name": "整理影像分析結果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3280,
+        520
+      ]
     }
   ],
   "connections": {
@@ -1202,7 +1315,7 @@
       "main": [
         [
           {
-            "node": "組出 Dropbox 路徑",
+            "node": "IF｜需要影像分析",
             "type": "main",
             "index": 0
           }
@@ -1285,6 +1398,57 @@
           }
         ],
         []
+      ]
+    },
+    "IF｜需要影像分析": {
+      "main": [
+        [
+          {
+            "node": "組出影像分析請求",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "組出 Dropbox 路徑",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組出影像分析請求": {
+      "main": [
+        [
+          {
+            "node": "AI｜影像分析（Claude）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI｜影像分析（Claude）": {
+      "main": [
+        [
+          {
+            "node": "整理影像分析結果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "整理影像分析結果": {
+      "main": [
+        [
+          {
+            "node": "組出 Dropbox 路徑",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
