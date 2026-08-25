@@ -281,6 +281,14 @@ sudo crontab -e
 
 ### 6.4 Dropbox OAuth2
 
+> **⚠️ 重要（2026-08-26 實戰教訓）**：n8n 內建的「Dropbox OAuth2 API」憑證類型**權限清單寫死且不含 `sharing.write`**，
+> 會導致「建立分享連結」永遠回 `missing_scope`，且無論在 Dropbox App Console 開放什麼權限都無效。
+> **正確做法**：改用通用的「**OAuth2 API**」憑證類型，自行填入：
+> Authorization URL `https://www.dropbox.com/oauth2/authorize`、Access Token URL `https://api.dropboxapi.com/oauth2/token`、
+> Scope `files.metadata.read files.metadata.write files.content.read files.content.write sharing.read sharing.write account_info.read`、
+> Auth URI Query Parameters `token_access_type=offline`、Authentication `Header`。
+> 工作流中的兩個 Dropbox 節點以 Generic Credential Type（OAuth2 API）掛載此憑證。
+
 先建立 Dropbox App：
 
 1. 開 [Dropbox App Console](https://www.dropbox.com/developers/apps) → **Create app**
