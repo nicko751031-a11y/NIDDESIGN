@@ -8,6 +8,28 @@
 
 ---
 
+## 0. 先做這一步
+
+```bash
+scripts/codex-bootstrap
+```
+
+會驗證分支、必要檔案、`N8N_API_KEY`、n8n 連線，並把線上工作流快照拉到
+`n8n/workflows/live/` 與 repo 版本比對。**全部通過再往下做**；失敗時它會直接
+指出是分支、金鑰還是網路的問題。
+
+若顯示不在正確分支：
+
+```bash
+git fetch origin claude/line-assistant-n8n-integration-57c1w3
+git checkout claude/line-assistant-n8n-integration-57c1w3
+```
+
+若 `N8N_API_KEY` 未設定：到執行環境的 Secrets 加上它，值由 n8n UI →
+Settings → n8n API → Create an API key 產生。**不要把它寫進任何檔案。**
+
+---
+
 ## 1. 系統長什麼樣
 
 ```
