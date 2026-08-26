@@ -15,7 +15,7 @@
 不是預設分支。若 Codex 的介面可以選分支就直接選它；不能選也沒關係，
 下面的提示詞會叫它自己切換。
 
-### ② 給它一把 n8n API key
+### ②-a 給它一把 n8n API key
 
 1. 開 n8n → 右下角帳號 → **Settings** → **n8n API** → **Create an API key**
 2. 複製產生的字串
@@ -24,6 +24,19 @@
    - 值：剛才複製的字串
 
 > 順便把舊的 key 撤銷。之前那把曾在對話中明文出現過，現在換掉最安全。
+
+### ②-b（選用）讓它也能讀 Notion 與呼叫 LINE
+
+Codex 大部分「了解群組在聊什麼」的需求靠 Notion 就能滿足，加這個最實用：
+
+- `NOTION_TOKEN`：Notion Integration Token
+
+若還需要取群組名稱、下載附件、或（謹慎地）推播訊息，再加：
+
+- `LINE_CHANNEL_ACCESS_TOKEN`
+
+⚠️ LINE 沒有讀取歷史訊息的 API，webhook 也只能有一個（現在指向 n8n，改掉會讓
+歸檔停擺）。詳見 `docs/line-assistant/Codex-連接LINE.md`。
 
 ---
 

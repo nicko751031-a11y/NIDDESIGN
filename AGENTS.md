@@ -84,6 +84,28 @@ Codex 若不支援 MCP，走 2-1 的 REST API 即可，功能等價。
 執行後讀 execution 結果。**用完務必刪除，且不要把 API key 寫進節點參數**
 （會留在工作流 JSON 與執行紀錄裡）。
 
+### 2-4 LINE Messaging API
+
+```bash
+export LINE_CHANNEL_ACCESS_TOKEN=...
+scripts/line webhook          # 確認 webhook 沒被改掉
+scripts/line quota            # 推播用量
+scripts/line group <groupId>  # 群組摘要
+scripts/line content <messageId> out.jpg
+```
+
+**三個前提，違反會出事：**
+
+1. **LINE 沒有讀取歷史訊息的 API。** 要看群組聊了什麼，查 Notion 06｜訊息紀錄，
+   不要試圖去問 LINE。
+2. **webhook 只能有一個**，目前指向 n8n。改掉它整套歸檔會停擺。要讓別的系統
+   收到即時訊息，在 n8n 工作流裡多接一個轉發節點，不要動 webhook 設定。
+3. **Access Token 能以公司名義推播給業主，訊息無法收回。** `scripts/line` 對所有
+   非 GET 操作預設只演練不送出，要真的送必須加 `LINE_ALLOW_SEND=1`。
+   不要把它設成環境預設值。
+
+細節見 `docs/line-assistant/Codex-連接LINE.md`。
+
 ---
 
 ## 3. 資源清單
