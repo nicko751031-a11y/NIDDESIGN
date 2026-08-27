@@ -106,6 +106,27 @@ scripts/line content <messageId> out.jpg
 
 細節見 `docs/line-assistant/Codex-連接LINE.md`。
 
+### 2-5 Railway（部署平台）
+
+```bash
+export RAILWAY_TOKEN=...        # 專案權杖，不要用帳號權杖
+scripts/railway whoami
+scripts/railway deploys
+scripts/railway logs <deploymentId>
+```
+
+**用途限於看日誌與診斷**，日常改動不需要碰 Railway。判斷順序永遠是
+**先查 n8n 執行紀錄，n8n 整個沒回應時才查 Railway**。
+
+會改變狀態的操作（含任何 GraphQL mutation）預設只演練，需 `RAILWAY_ALLOW_WRITE=1`
+才執行——這台服務就是小助理本體，重啟期間的 LINE 訊息會永久遺失。
+
+**絕對不要動**：`N8N_RUNNERS_ENABLED=true`（關掉會觸發訊息重送災難）、
+`LINE_CHANNEL_SECRET`（改掉簽章全部驗證失敗）。
+設定變數後不會自動部署，要另外觸發 redeploy。
+
+細節見 `docs/line-assistant/Codex-連接Railway.md`。
+
 ---
 
 ## 3. 資源清單

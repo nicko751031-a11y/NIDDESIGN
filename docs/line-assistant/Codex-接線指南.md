@@ -38,6 +38,14 @@ Codex 大部分「了解群組在聊什麼」的需求靠 Notion 就能滿足，
 ⚠️ LINE 沒有讀取歷史訊息的 API，webhook 也只能有一個（現在指向 n8n，改掉會讓
 歸檔停擺）。詳見 `docs/line-assistant/Codex-連接LINE.md`。
 
+### ②-c（選用）讓它能查 Railway 日誌
+
+只在需要診斷「n8n 整個沒回應」時才用得到：
+
+- `RAILWAY_TOKEN`：**專案**權杖（Railway 專案 Settings → Tokens），不要用帳號權杖
+
+詳見 `docs/line-assistant/Codex-連接Railway.md`。
+
 ---
 
 ## 然後把這段貼給 Codex
