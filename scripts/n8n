@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# n8n 公開 API 的薄包裝，給 AI agent 與人類共用。
+#
+# 用法：
+#   export N8N_API_KEY=...                 # 見 .env.example
+#   scripts/n8n get  /workflows
+#   scripts/n8n get  /workflows/d5xNfn885DzBxrc3
+#   scripts/n8n get  '/executions?workflowId=d5xNfn885DzBxrc3&limit=5'
+#   scripts/n8n get  '/executions/1234?includeData=true'
+#   scripts/n8n put  /workflows/d5xNfn885DzBxrc3 @patched.json
+#   scripts/n8n post /credentials @cred.json
+#   scripts/n8n del  /executions/1234
+#
+# 慣例：路徑不用寫 /api/v1；body 用 @檔名 或直接給 JSON 字串。
+set -euo pipefail
+
+BASE="${N8N_BASE_URL:-https://n8n-production-65dca.up.railway.app}/api/v1"
+
+if [[ -z "${N8N_API_KEY:-}" ]]; then
+  echo "ERROR: 未設定 N8N_API_KEY。請見 .env.example，或在 n8n UI → Settings → n8n API 產生新的 key。" >&2
+  exit 1
+fi
+
+method="${1:?用法: scripts/n8n <get|post|put|patch|del> <path> [body]}"
+path="${2:?缺少路徑，例如 /workflows}"
+body="${3:-}"
+
+case "$method" in
+  get)   verb=GET ;;
+  post)  verb=POST ;;
+  put)   verb=PUT ;;
+  patch) verb=PATCH ;;
+  del|delete) verb=DELETE ;;
+  *) echo "ERROR: 不支援的 method: $method" >&2; exit 1 ;;
+esac
+
+args=(-sS -X "$verb" "${BASE}${path}" -H "X-N8N-API-KEY: ${N8N_API_KEY}")
+
+if [[ -n "$body" ]]; then
+  args+=(-H 'Content-Type: application/json')
+  if [[ "$body" == @* ]]; then
+    args+=(--data-binary "$body")
+  else
+    args+=(--data-binary "$body")
+  fi
+fi
+
+curl "${args[@]}"
+echo

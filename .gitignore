@@ -1,0 +1,10 @@
+infra/n8n/.env
+infra/n8n/backups/
+infra/n8n/files/
+*.log
+
+# 本機密鑰
+.env
+
+# agent 拉下來的線上快照（比對用，不進版控）
+n8n/workflows/live/

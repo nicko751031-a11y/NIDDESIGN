@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# 一鍵自我檢查：確認 agent 已經接上 n8n，並把線上工作流拉下來比對。
+#
+#   export N8N_API_KEY=...
+#   scripts/codex-bootstrap
+#
+# 這支腳本不會修改線上任何東西，只做讀取與本機寫檔，可安心重複執行。
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+WF_MAIN=d5xNfn885DzBxrc3
+WF_ERR=S6BhMMX1APqqdJNl
+BRANCH=claude/line-assistant-n8n-integration-57c1w3
+ok=0; fail=0
+say()  { printf '%s\n' "$*"; }
+pass() { printf '  ✅ %s\n' "$*"; ok=$((ok+1)); }
+bad()  { printf '  ❌ %s\n' "$*"; fail=$((fail+1)); }
+warn() { printf '  ⚠️  %s\n' "$*"; }
+
+say ''
+say '═══ 川果設計小助理 · agent 接線自我檢查 ═══'
+say ''
+
+# ── 1. 分支 ────────────────────────────────────────────────
+say '[1/5] 檢查 git 分支'
+current=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')
+if [[ "$current" == "$BRANCH" ]]; then
+  pass "已在工作分支 $BRANCH"
+else
+  warn "目前在 $current，工作內容在 $BRANCH"
+  say "     切換指令：git fetch origin $BRANCH && git checkout $BRANCH"
+fi
+
+# ── 2. 必要檔案 ────────────────────────────────────────────
+say ''
+say '[2/5] 檢查專案檔案'
+for f in AGENTS.md n8n/workflows/01-line-ingest.json n8n/workflows/02-error-handler.json; do
+  [[ -f "$f" ]] && pass "$f" || bad "$f 不存在（repo 可能不完整或分支不對）"
+done
+
+# ── 3. 金鑰 ────────────────────────────────────────────────
+say ''
+say '[3/5] 檢查 N8N_API_KEY'
+if [[ -z "${N8N_API_KEY:-}" ]]; then
+  bad 'N8N_API_KEY 未設定'
+  say '     在 Codex 的 Environment → Secrets 新增 N8N_API_KEY，值由 n8n UI'
+  say '     → Settings → n8n API → Create an API key 產生。'
+  say ''
+  say "小計：通過 $ok 項、失敗 $fail 項。沒有金鑰就無法繼續，先補上再重跑。"
+  exit 1
+fi
+pass "N8N_API_KEY 已設定（長度 ${#N8N_API_KEY}）"
+
+# ── 4. 連線 ────────────────────────────────────────────────
+say ''
+say '[4/5] 測試 n8n API 連線'
+resp=$(scripts/n8n get '/workflows?limit=50' 2>&1) || true
+if printf '%s' "$resp" | grep -q '"data"'; then
+  count=$(printf '%s' "$resp" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]))' 2>/dev/null || echo '?')
+  pass "連線成功，看得到 $count 個工作流"
+  printf '%s' "$resp" | python3 -c '
+import json,sys
+for w in json.load(sys.stdin)["data"]:
+    print("     - {} {} {}".format(w["id"], "啟用" if w.get("active") else "停用", w["name"]))
+' 2>/dev/null
+elif printf '%s' "$resp" | grep -qi 'unauthorized\|401'; then
+  bad 'API key 被拒絕（401）。可能已過期或被輪換，請重新產生。'
+elif printf '%s' "$resp" | grep -qi 'could not resolve\|timed out\|connection refused\|connect tunnel\|proxy\|407'; then
+  bad '連不到 n8n 主機（網路或 proxy 阻擋）。'
+  say "     回應：$(printf '%s' "$resp" | head -c 160)"
+  say '     若在沙箱環境，請確認允許連外到 n8n-production-65dca.up.railway.app'
+else
+  bad "非預期回應：$(printf '%s' "$resp" | head -c 200)"
+fi
+
+# ── 5. 拉線上快照並比對 ────────────────────────────────────
+say ''
+say '[5/5] 拉線上工作流快照，與 repo 版本比對'
+if [[ $fail -eq 0 ]]; then
+  mkdir -p n8n/workflows/live
+  for pair in "$WF_MAIN:01-line-ingest" "$WF_ERR:02-error-handler"; do
+    id="${pair%%:*}"; name="${pair##*:}"
+    body=$(scripts/n8n get "/workflows/$id" 2>/dev/null)
+    if printf '%s' "$body" | grep -q '"nodes"'; then
+      printf '%s' "$body" | python3 -c '
+import json,sys
+w=json.load(sys.stdin)
+json.dump(w, open(sys.argv[1],"w"), ensure_ascii=False, indent=2)
+print("     {} → {} 個節點，{}".format(w["name"], len(w["nodes"]), "啟用中" if w.get("active") else "未啟用"))
+' "n8n/workflows/live/$name.json"
+      pass "已存成 n8n/workflows/live/$name.json"
+      python3 - "$name" <<'PY'
+import json,sys
+name=sys.argv[1]
+try:
+    live=json.load(open(f"n8n/workflows/live/{name}.json"))
+    repo=json.load(open(f"n8n/workflows/{name}.json"))
+except Exception as e:
+    print(f"     （無法比對：{e}）"); raise SystemExit
+lv={n["name"] for n in live["nodes"]}
+rp={n["name"] for n in repo["nodes"]}
+only_live, only_repo = lv-rp, rp-lv
+if not only_live and not only_repo:
+    print(f"     節點名稱與 repo 版本一致（{len(lv)} 個）")
+else:
+    if only_live: print(f"     ⚠️ 只在線上有：{'、'.join(sorted(only_live))}")
+    if only_repo: print(f"     ⚠️ 只在 repo 有：{'、'.join(sorted(only_repo))}")
+    print("     → 兩邊不同步，動手前先確認要以哪一邊為準")
+PY
+    else
+      bad "$id 讀取失敗"
+    fi
+  done
+else
+  warn '前面有失敗項目，略過快照步驟'
+fi
+
+say ''
+say '═══════════════════════════════════════════'
+if [[ $fail -eq 0 ]]; then
+  say "全部通過（$ok 項）。你已經接上工作流，可以開始了。"
+  say ''
+  say '接下來建議：'
+  say '  1. 讀 AGENTS.md 第 4 節的節點地圖，了解資料怎麼流'
+  say '  2. 看最近的執行紀錄：'
+  say "     scripts/n8n get '/executions?workflowId=$WF_MAIN&limit=5'"
+  say '  3. 改動前先讀 AGENTS.md 第 6 節「動手前的規矩」'
+else
+  say "通過 $ok 項、失敗 $fail 項。請先處理上面標 ❌ 的項目。"
+fi
+say ''
+exit $(( fail > 0 ? 1 : 0 ))

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Railway 公開 GraphQL API 的薄包裝，給 AI agent 與人類共用。
+#
+#   export RAILWAY_TOKEN=...           # 專案權杖（建議）
+#   scripts/railway whoami             # 確認權杖對應到哪個專案
+#   scripts/railway services           # 列出服務
+#   scripts/railway vars               # 列出環境變數名稱（不顯示值）
+#   scripts/railway deploys            # 最近的部署
+#   scripts/railway logs               # 最新部署的日誌
+#   scripts/railway redeploy           # 重新部署（預設演練，見下方）
+#   scripts/railway gql '<query>' '<variables json>'   # 任意 GraphQL
+#
+# ⚠️ 會改變狀態的指令（redeploy、restart、設定變數）預設只演練不執行。
+#    確定要做才加 RAILWAY_ALLOW_WRITE=1：
+#      RAILWAY_ALLOW_WRITE=1 scripts/railway redeploy
+#    理由：這台 Railway 服務就是 LINE 小助理本體，重啟期間收不到訊息，
+#    而 LINE 不會無限重送，過期的訊息就永久遺失了。
+set -euo pipefail
+
+API=https://backboard.railway.com/graphql/v2
+
+if [[ -n "${RAILWAY_TOKEN:-}" ]]; then
+  AUTH_HEADER="Project-Access-Token: ${RAILWAY_TOKEN}"
+elif [[ -n "${RAILWAY_API_TOKEN:-}" ]]; then
+  AUTH_HEADER="Authorization: Bearer ${RAILWAY_API_TOKEN}"
+else
+  echo "ERROR: 未設定 RAILWAY_TOKEN（專案權杖）或 RAILWAY_API_TOKEN（帳號權杖）。見 .env.example。" >&2
+  exit 1
+fi
+
+gql() {
+  local q="$1" v="${2:-{\}}"
+  python3 -c '
+import json,sys
+print(json.dumps({"query":sys.argv[1],"variables":json.loads(sys.argv[2])}))
+' "$q" "$v" | curl -sS -X POST "$API" -H "$AUTH_HEADER" -H 'Content-Type: application/json' --data-binary @-
+  echo
+}
+
+need_write() {
+  if [[ "${RAILWAY_ALLOW_WRITE:-0}" != "1" ]]; then
+    echo "【演練，未執行】$1"
+    echo "確定要執行請加 RAILWAY_ALLOW_WRITE=1"
+    exit 0
+  fi
+}
+
+# 取得專案權杖對應的 projectId / environmentId
+ctx() {
+  gql 'query { projectToken { projectId environmentId } }'
+}
+
+cmd="${1:?用法: scripts/railway <whoami|services|vars|deploys|logs|redeploy|gql> ...}"
+shift || true
+
+case "$cmd" in
+  whoami)
+    if [[ -n "${RAILWAY_TOKEN:-}" ]]; then ctx
+    else gql 'query { me { id name email } }'; fi
+    ;;
+  services)
+    pid=$(ctx | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["projectToken"]["projectId"])')
+    gql 'query($id:String!){ project(id:$id){ name services{ edges{ node{ id name } } } } }' "{\"id\":\"$pid\"}"
+    ;;
+  vars)
+    echo '提示：Railway 不透過此包裝顯示變數的值，避免密鑰外流到日誌或 agent 對話。'
+    echo '要看變數名稱請到 Railway Dashboard，或用 Railway MCP 的 list-variables。'
+    ;;
+  deploys)
+    pid=$(ctx | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["projectToken"]["projectId"])')
+    eid=$(ctx | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["projectToken"]["environmentId"])')
+    gql 'query($p:String!,$e:String!){ deployments(first:5, input:{projectId:$p, environmentId:$e}){ edges{ node{ id status createdAt staticUrl } } } }' \
+        "{\"p\":\"$pid\",\"e\":\"$eid\"}"
+    ;;
+  logs)
+    did="${1:-}"
+    if [[ -z "$did" ]]; then
+      echo '用法: scripts/railway logs <deploymentId>（先用 scripts/railway deploys 取得 ID）'
+      exit 1
+    fi
+    gql 'query($id:String!){ deploymentLogs(deploymentId:$id, limit:100){ timestamp message severity } }' "{\"id\":\"$did\"}"
+    ;;
+  redeploy)
+    did="${1:-}"
+    [[ -z "$did" ]] && { echo '用法: scripts/railway redeploy <deploymentId>'; exit 1; }
+    need_write "redeploy $did"
+    gql 'mutation($id:String!){ deploymentRedeploy(id:$id){ id status } }' "{\"id\":\"$did\"}"
+    ;;
+  gql)
+    q="${1:?缺少 GraphQL query}"; v="${2:-{\}}"
+    if [[ "$q" == mutation* ]]; then need_write "GraphQL mutation"; fi
+    gql "$q" "$v"
+    ;;
+  *) echo "ERROR: 不支援的指令 $cmd" >&2; exit 1 ;;
+esac

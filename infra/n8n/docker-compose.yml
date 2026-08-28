@@ -1,0 +1,110 @@
+# 川果設計 NID DESIGN LAB｜自架 n8n
+# 用法：cp .env.example .env → 填寫 → docker compose up -d
+# Caddy 會自動向 Let's Encrypt 申請並續約 HTTPS 憑證。
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nid-n8n-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: Asia/Taipei
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: nid-n8n
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # --- 資料庫 ---
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+
+      # --- 對外網址（決定 Webhook URL，設錯 LINE 會連不進來）---
+      N8N_HOST: ${N8N_HOST}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      N8N_EDITOR_BASE_URL: https://${N8N_HOST}/
+      WEBHOOK_URL: https://${N8N_HOST}/
+      N8N_PROXY_HOPS: 1
+
+      # --- 安全 ---
+      # 加密金鑰遺失＝所有已儲存的憑證失效，請一併備份 .env
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_SECURE_COOKIE: "true"
+      # 允許 Code 節點讀取環境變數（簽章驗證需要 LINE_CHANNEL_SECRET）
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      # 允許 Code 節點 require('crypto') 做 HMAC-SHA256 簽章驗證
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+
+      # --- 給工作流讀取的密鑰與設定 ---
+      LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET}
+      # 系統出錯時要推播給誰（管理者 User ID 或內部群組 Group ID），可留空
+      N8N_ALERT_LINE_TARGET: ${N8N_ALERT_LINE_TARGET:-}
+      # Notion 資料庫 ID：留空則使用工作流內建的預設值
+      NOTION_DB_GROUPS: ${NOTION_DB_GROUPS:-}
+      NOTION_DB_FILES: ${NOTION_DB_FILES:-}
+      NOTION_DB_MESSAGES: ${NOTION_DB_MESSAGES:-}
+
+      # --- 一般設定 ---
+      GENERIC_TIMEZONE: Asia/Taipei
+      TZ: Asia/Taipei
+      N8N_DEFAULT_LOCALE: zh-TW
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+
+      # --- 執行紀錄保留（預設 14 天，避免資料庫無限長大）---
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: 336
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: all
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+
+      # --- 檔案暫存上限：LINE 影片可能很大，放寬到 256MB ---
+      N8N_PAYLOAD_SIZE_MAX: 256
+      N8N_DEFAULT_BINARY_DATA_MODE: filesystem
+    volumes:
+      - n8n_data:/home/node/.n8n
+    expose:
+      - "5678"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: nid-n8n-caddy
+    restart: unless-stopped
+    depends_on:
+      - n8n
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      N8N_HOST: ${N8N_HOST}
+      ACME_EMAIL: ${ACME_EMAIL}
+      TZ: Asia/Taipei
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  postgres_data:
+  n8n_data:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# LINE Messaging API 的薄包裝，給 AI agent 與人類共用。
+#
+#   export LINE_CHANNEL_ACCESS_TOKEN=...
+#   scripts/line quota                      # 本月推播用量
+#   scripts/line profile U1234...           # 取使用者資料
+#   scripts/line group C1234...             # 取群組摘要
+#   scripts/line member C1234... U1234...   # 取群組成員資料
+#   scripts/line content 628972922400408214 out.jpg   # 下載訊息附件
+#   scripts/line webhook                    # 目前設定的 webhook URL
+#   scripts/line push U1234... "訊息內容"    # 推播（預設為演練，見下方）
+#   scripts/line raw GET /v2/bot/info       # 任意端點
+#
+# ⚠️ 送出類指令（push）預設只演練不真的送出。
+#    確定要送才加 LINE_ALLOW_SEND=1，例如：
+#      LINE_ALLOW_SEND=1 scripts/line push U1234... "測試"
+#    理由：這是公司正式官方帳號，推播會直接出現在業主與同事的手機上，
+#    而且無法收回。
+set -euo pipefail
+
+BASE=https://api.line.me
+DATA=https://api-data.line.me
+
+if [[ -z "${LINE_CHANNEL_ACCESS_TOKEN:-}" ]]; then
+  echo "ERROR: 未設定 LINE_CHANNEL_ACCESS_TOKEN。見 .env.example。" >&2
+  exit 1
+fi
+AUTH="Authorization: Bearer ${LINE_CHANNEL_ACCESS_TOKEN}"
+
+cmd="${1:?用法: scripts/line <quota|profile|group|member|content|webhook|push|raw> ...}"
+shift || true
+
+case "$cmd" in
+  quota)
+    curl -sS "$BASE/v2/bot/message/quota" -H "$AUTH"; echo
+    curl -sS "$BASE/v2/bot/message/quota/consumption" -H "$AUTH"; echo
+    ;;
+  profile)
+    curl -sS "$BASE/v2/bot/profile/${1:?缺少 userId}" -H "$AUTH"; echo
+    ;;
+  group)
+    curl -sS "$BASE/v2/bot/group/${1:?缺少 groupId}/summary" -H "$AUTH"; echo
+    ;;
+  member)
+    curl -sS "$BASE/v2/bot/group/${1:?缺少 groupId}/member/${2:?缺少 userId}" -H "$AUTH"; echo
+    ;;
+  content)
+    mid="${1:?缺少 messageId}"; out="${2:?缺少輸出檔名}"
+    curl -sS "$DATA/v2/bot/message/${mid}/content" -H "$AUTH" -o "$out"
+    echo "已存成 $out（$(wc -c < "$out") bytes）"
+    ;;
+  webhook)
+    curl -sS "$BASE/v2/bot/channel/webhook/endpoint" -H "$AUTH"; echo
+    ;;
+  push)
+    to="${1:?缺少收件者 ID}"; text="${2:?缺少訊息內容}"
+    body=$(python3 -c '
+import json,sys
+print(json.dumps({"to":sys.argv[1],"messages":[{"type":"text","text":sys.argv[2]}]},ensure_ascii=False))
+' "$to" "$text")
+    if [[ "${LINE_ALLOW_SEND:-0}" != "1" ]]; then
+      echo "【演練，未送出】POST /v2/bot/message/push"
+      echo "$body"
+      echo
+      echo "確定要送出請改用：LINE_ALLOW_SEND=1 scripts/line push ..."
+      exit 0
+    fi
+    curl -sS -X POST "$BASE/v2/bot/message/push" -H "$AUTH" \
+      -H 'Content-Type: application/json' --data-binary "$body"; echo
+    ;;
+  raw)
+    verb="${1:?缺少 method}"; path="${2:?缺少路徑}"; payload="${3:-}"
+    if [[ "$verb" != "GET" && "${LINE_ALLOW_SEND:-0}" != "1" ]]; then
+      echo "【演練，未送出】$verb $path"; echo "${payload:-（無 body）}"
+      echo; echo "確定要執行請加 LINE_ALLOW_SEND=1"; exit 0
+    fi
+    args=(-sS -X "$verb" "${BASE}${path}" -H "$AUTH")
+    [[ -n "$payload" ]] && args+=(-H 'Content-Type: application/json' --data-binary "$payload")
+    curl "${args[@]}"; echo
+    ;;
+  *) echo "ERROR: 不支援的指令 $cmd" >&2; exit 1 ;;
+esac
