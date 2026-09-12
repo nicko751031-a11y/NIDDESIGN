@@ -1,0 +1,26 @@
+name = "nid-timeclock"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+# 靜態頁面（打卡頁 / 管理後台）
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# D1 資料庫：部署前先執行
+#   npx wrangler d1 create nid-timeclock
+# 然後把回傳的 database_id 填到下面
+[[d1_databases]]
+binding = "DB"
+database_name = "nid-timeclock"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[vars]
+COMPANY_NAME = "川果設計 NID DESIGN LAB"
+# LINE Login channel 的 LIFF ID（建立 LIFF app 後填入，格式如 1234567890-abcdefgh）
+LINE_LIFF_ID = "REPLACE_WITH_LIFF_ID"
+# LINE Login channel 的 Channel ID（用來驗證 access token 未被偽造）
+LINE_LOGIN_CHANNEL_ID = "REPLACE_WITH_LINE_LOGIN_CHANNEL_ID"
+
+# 機密請用 secret 設定，不要寫在這個檔案：
+#   npx wrangler secret put ADMIN_TOKEN

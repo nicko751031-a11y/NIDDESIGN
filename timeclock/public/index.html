@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>NID 打卡</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --ink:#1a1d21; --muted:#6b7280;
+    --brand:#06c755; --brand-dark:#05a648; --out:#3b82f6; --warn:#d97706; --err:#dc2626;
+    --line:#e5e7eb; --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px;background:var(--bg);color:var(--ink);
+    font-family:"PingFang TC","Microsoft JhengHei",system-ui,sans-serif;font-size:15px}
+  .wrap{max-width:480px;margin:0 auto}
+  h1{font-size:18px;margin:4px 0 2px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px;margin-bottom:14px}
+  .clock{font-size:40px;font-weight:700;text-align:center;letter-spacing:1px;
+    font-variant-numeric:tabular-nums}
+  .date{text-align:center;color:var(--muted);margin-bottom:8px}
+  .who{text-align:center;font-size:14px;margin-bottom:4px}
+  .gps{text-align:center;font-size:12px;color:var(--muted);min-height:18px}
+  .btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  button{border:0;border-radius:12px;padding:16px 8px;font-size:17px;font-weight:700;
+    color:#fff;cursor:pointer;font-family:inherit}
+  button:disabled{opacity:.5}
+  .b-in{background:var(--brand)} .b-out{background:var(--out)}
+  .b-sub{background:#8b95a5;font-size:14px;padding:10px 8px;font-weight:600}
+  .msg{margin-top:12px;padding:10px 12px;border-radius:10px;font-size:14px;display:none}
+  .msg.ok{display:block;background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
+  .msg.bad{display:block;background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+  .msg.warn{display:block;background:#fffbeb;color:#92400e;border:1px solid #fde68a}
+  input{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;
+    font-size:16px;font-family:inherit}
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tab{flex:1;text-align:center;padding:10px;border-radius:10px;background:#e9ebee;
+    font-weight:600;cursor:pointer;font-size:14px}
+  .tab.on{background:var(--ink);color:#fff}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--muted);font-weight:600}
+  .tag{font-size:11px;padding:1px 6px;border-radius:6px;background:#eef2ff;color:#3730a3}
+  .tag.void{background:#fee2e2;color:#991b1b;text-decoration:line-through}
+  .rowline{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+  .rowline input[type=month]{flex:1}
+  a.dl{color:var(--out);font-size:13px;text-decoration:none;font-weight:600}
+  .consent{font-size:11px;color:var(--muted);line-height:1.6;margin-top:10px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="company">打卡系統</h1>
+  <p class="sub">出勤紀錄依勞動基準法第30條逐日記載至分鐘並保存五年</p>
+
+  <!-- 綁定畫面 -->
+  <div id="bindView" class="card hidden">
+    <p><b>首次使用：綁定員工身分</b></p>
+    <p class="sub">請輸入管理員提供的 6 碼綁定代碼，將你的 LINE 帳號與員工資料綁定（一人一帳號）。</p>
+    <div class="rowline"><input id="bindCode" placeholder="綁定代碼" maxlength="6" autocapitalize="characters"></div>
+    <button class="b-in" style="width:100%" onclick="doBind()">綁定</button>
+    <div id="bindMsg" class="msg"></div>
+  </div>
+
+  <!-- 主畫面 -->
+  <div id="mainView" class="hidden">
+    <div class="tabs">
+      <div class="tab on" id="tabPunch" onclick="showTab('punch')">打卡</div>
+      <div class="tab" id="tabRecords" onclick="showTab('records')">我的紀錄</div>
+    </div>
+
+    <div id="punchView">
+      <div class="card">
+        <div class="who" id="who"></div>
+        <div class="date" id="today"></div>
+        <div class="clock" id="clock">--:--:--</div>
+        <div class="gps" id="gps">定位中…</div>
+        <div class="btns">
+          <button class="b-in" id="btnIn" onclick="punch('in')">上班打卡</button>
+          <button class="b-out" id="btnOut" onclick="punch('out')">下班打卡</button>
+          <button class="b-sub" id="btnBs" onclick="punch('break_start')">休息開始</button>
+          <button class="b-sub" id="btnBe" onclick="punch('break_end')">休息結束</button>
+        </div>
+        <div id="punchMsg" class="msg"></div>
+        <p class="consent">打卡時間以伺服器時間為準。打卡將記錄你目前的 GPS 位置，僅作為出勤管理與稽核用途，
+        依個人資料保護法蒐集，除法令要求外不作其他利用。若拒絕定位仍可打卡，但紀錄將標示無定位資訊。</p>
+      </div>
+    </div>
+
+    <div id="recordsView" class="hidden">
+      <div class="card">
+        <div class="rowline">
+          <input type="month" id="month">
+          <button class="b-sub" onclick="loadRecords()">查詢</button>
+        </div>
+        <div id="recordsBody">請選擇月份</div>
+        <div id="confirmArea" style="margin-top:12px"></div>
+        <p class="consent">依勞動基準法第30條第6項，你可隨時下載自己的出勤紀錄副本，雇主不得拒絕。</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="fatal" class="msg bad"></div>
+</div>
+
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script>
+let accessToken = null;
+let cfg = { liffId: '', companyName: '' };
+let geo = { lat: null, lng: null, accuracy: null };
+
+const $ = (id) => document.getElementById(id);
+const show = (id, on) => $(id).classList.toggle('hidden', !on);
+
+function setMsg(id, cls, text) {
+  const el = $(id);
+  el.className = 'msg ' + cls;
+  el.textContent = text;
+}
+
+function tickClock() {
+  const now = new Date();
+  const fmt = new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const dfmt = new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei',
+    year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' });
+  $('clock').textContent = fmt.format(now);
+  $('today').textContent = dfmt.format(now);
+}
+setInterval(tickClock, 1000); tickClock();
+
+function watchGPS() {
+  if (!navigator.geolocation) { $('gps').textContent = '此裝置不支援定位'; return; }
+  navigator.geolocation.watchPosition(
+    (pos) => {
+      geo = { lat: pos.coords.latitude, lng: pos.coords.longitude,
+              accuracy: Math.round(pos.coords.accuracy) };
+      $('gps').textContent = `已取得定位（精度約 ${geo.accuracy} 公尺）`;
+    },
+    () => { $('gps').textContent = '未取得定位（仍可打卡，將標示無定位）'; },
+    { enableHighAccuracy: true, maximumAge: 15000, timeout: 10000 }
+  );
+}
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({ 'x-line-access-token': accessToken || '' },
+    opts.headers || {});
+  if (opts.body) opts.headers['content-type'] = 'application/json';
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+  return data;
+}
+
+async function init() {
+  try {
+    cfg = await (await fetch('/api/config')).json();
+    if (cfg.companyName) $('company').textContent = cfg.companyName + '｜打卡';
+    if (!cfg.liffId || cfg.liffId.startsWith('REPLACE')) {
+      setMsg('fatal', 'bad', '系統尚未設定 LIFF ID，請通知管理員'); return;
+    }
+    await liff.init({ liffId: cfg.liffId });
+    if (!liff.isLoggedIn()) { liff.login(); return; }
+    accessToken = liff.getAccessToken();
+    const me = await api('/api/me');
+    if (!me.bound) { show('bindView', true); return; }
+    $('who').textContent = `${me.employee.name}（${me.employee.emp_no}）`;
+    show('mainView', true);
+    watchGPS();
+    const now = new Date();
+    $('month').value = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Taipei',
+      year: 'numeric', month: '2-digit' }).format(now).slice(0, 7);
+  } catch (e) {
+    setMsg('fatal', 'bad', '初始化失敗：' + e.message);
+  }
+}
+
+async function doBind() {
+  try {
+    const r = await api('/api/bind', { method: 'POST', body: JSON.stringify({
+      accessToken, bindCode: $('bindCode').value.trim().toUpperCase() }) });
+    setMsg('bindMsg', 'ok', `綁定成功：${r.employee.name}（${r.employee.emp_no}），重新載入中…`);
+    setTimeout(() => location.reload(), 1200);
+  } catch (e) { setMsg('bindMsg', 'bad', e.message); }
+}
+
+let punching = false;
+async function punch(type) {
+  if (punching) return;
+  punching = true;
+  ['btnIn','btnOut','btnBs','btnBe'].forEach(id => $(id).disabled = true);
+  try {
+    const r = await api('/api/punch', { method: 'POST', body: JSON.stringify({
+      accessToken, type, lat: geo.lat, lng: geo.lng, accuracy: geo.accuracy }) });
+    let m = `${r.typeLabel}打卡成功：${r.date} ${r.time}`;
+    if (r.inRange === 0) {
+      setMsg('punchMsg', 'warn', m + '（不在打卡範圍內，已記錄位置供稽核）');
+    } else {
+      setMsg('punchMsg', 'ok', m);
+    }
+  } catch (e) { setMsg('punchMsg', 'bad', e.message); }
+  punching = false;
+  ['btnIn','btnOut','btnBs','btnBe'].forEach(id => $(id).disabled = false);
+}
+
+function showTab(t) {
+  $('tabPunch').classList.toggle('on', t === 'punch');
+  $('tabRecords').classList.toggle('on', t === 'records');
+  show('punchView', t === 'punch');
+  show('recordsView', t === 'records');
+  if (t === 'records') loadRecords();
+}
+
+async function loadRecords() {
+  const month = $('month').value;
+  if (!month) return;
+  const el = $('recordsBody');
+  el.textContent = '載入中…';
+  try {
+    const r = await api('/api/me/records?month=' + month);
+    if (!r.punches.length) { el.textContent = '本月無打卡紀錄'; }
+    else {
+      const rows = r.punches.map(p => `<tr>
+        <td>${p.local_date.slice(5)}</td>
+        <td>${p.local_time.slice(0,5)}</td>
+        <td>${r.typeLabels[p.type] || p.type}</td>
+        <td>${p.voided ? '<span class="tag void">作廢</span>'
+             : p.source === 'amendment' ? '<span class="tag">補登</span>' : ''}</td>
+      </tr>`).join('');
+      el.innerHTML = `<table><thead><tr><th>日期</th><th>時間</th><th>類別</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table>
+        <p style="margin:10px 0 0"><a class="dl" href="#" onclick="downloadCsv(event)">下載本月出勤紀錄副本（CSV）</a></p>`;
+    }
+    const c = $('confirmArea');
+    if (r.confirmedAt) {
+      c.innerHTML = `<div class="msg ok" style="display:block">你已於 ${r.confirmedAt.slice(0,10)} 確認本月出勤紀錄</div>`;
+    } else if (r.punches.length) {
+      c.innerHTML = `<button class="b-in" style="width:100%" onclick="confirmMonth()">確認本月出勤紀錄無誤</button>
+        <p class="consent">每月確認出勤紀錄可減少勞資雙方工時爭議（勞動部行政指導建議）。如有錯漏請先聯絡管理員補登。</p>`;
+    } else c.innerHTML = '';
+  } catch (e) { el.textContent = '載入失敗：' + e.message; }
+}
+
+async function downloadCsv(ev) {
+  ev.preventDefault();
+  const month = $('month').value;
+  const r = await fetch('/api/me/export?month=' + month,
+    { headers: { 'x-line-access-token': accessToken } });
+  const blob = await r.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `出勤紀錄_${month}.csv`;
+  a.click();
+}
+
+async function confirmMonth() {
+  try {
+    await api('/api/me/confirm', { method: 'POST', body: JSON.stringify({
+      accessToken, month: $('month').value }) });
+    loadRecords();
+  } catch (e) { alert(e.message); }
+}
+
+init();
+</script>
+</body>
+</html>

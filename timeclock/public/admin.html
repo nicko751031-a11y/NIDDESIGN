@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NID 打卡管理後台</title>
+<style>
+  :root{--bg:#f5f6f8;--card:#fff;--ink:#1a1d21;--muted:#6b7280;--brand:#06c755;
+    --out:#3b82f6;--err:#dc2626;--line:#e5e7eb}
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px;background:var(--bg);color:var(--ink);
+    font-family:"PingFang TC","Microsoft JhengHei",system-ui,sans-serif;font-size:14px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:16px;margin-bottom:14px}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tab{padding:8px 14px;border-radius:8px;background:#e9ebee;font-weight:600;
+    cursor:pointer;font-size:13px}
+  .tab.on{background:var(--ink);color:#fff}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:600;white-space:nowrap}
+  input,select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+    font-size:14px;font-family:inherit}
+  button{border:0;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;
+    color:#fff;background:var(--ink);cursor:pointer;font-family:inherit}
+  button.green{background:var(--brand)} button.blue{background:var(--out)}
+  button.red{background:var(--err)} button.ghost{background:#8b95a5}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .msg{padding:8px 12px;border-radius:8px;margin:8px 0;display:none;font-size:13px}
+  .msg.ok{display:block;background:#ecfdf5;color:#065f46}
+  .msg.bad{display:block;background:#fef2f2;color:#991b1b}
+  .tag{font-size:11px;padding:1px 6px;border-radius:6px;background:#eef2ff;color:#3730a3}
+  .tag.void{background:#fee2e2;color:#991b1b}
+  .tag.out{background:#fffbeb;color:#92400e}
+  .muted{color:var(--muted)}
+  code{background:#f1f5f9;padding:1px 6px;border-radius:4px;font-size:13px}
+  .hidden{display:none}
+  a{color:var(--out)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">打卡管理後台</h1>
+
+  <div id="loginView" class="card">
+    <p><b>管理權限驗證</b></p>
+    <div class="row">
+      <input type="password" id="token" placeholder="ADMIN_TOKEN" style="flex:1;max-width:360px">
+      <button onclick="login()">登入</button>
+    </div>
+    <div id="loginMsg" class="msg"></div>
+  </div>
+
+  <div id="mainView" class="hidden">
+    <div class="tabs">
+      <div class="tab on" data-t="emp" onclick="showTab('emp')">員工管理</div>
+      <div class="tab" data-t="att" onclick="showTab('att')">出勤紀錄</div>
+      <div class="tab" data-t="amend" onclick="showTab('amend')">補登打卡</div>
+      <div class="tab" data-t="fence" onclick="showTab('fence')">打卡範圍</div>
+      <div class="tab" data-t="audit" onclick="showTab('audit')">稽核軌跡</div>
+    </div>
+
+    <!-- 員工 -->
+    <div id="v-emp" class="card">
+      <div class="row">
+        <input id="newEmpNo" placeholder="員工編號">
+        <input id="newName" placeholder="姓名">
+        <button class="green" onclick="addEmp()">新增員工</button>
+      </div>
+      <div id="empMsg" class="msg"></div>
+      <div id="empList">載入中…</div>
+      <p class="muted" style="font-size:12px">新增後把「綁定代碼」給員工，員工在 LINE 打卡頁輸入即可完成綁定（一人一 LINE 帳號，防止代打卡）。停用不會刪除任何歷史出勤紀錄（依法保存五年）。</p>
+    </div>
+
+    <!-- 出勤 -->
+    <div id="v-att" class="card hidden">
+      <div class="row">
+        <input type="month" id="attMonth">
+        <select id="attEmp"><option value="">全部員工</option></select>
+        <button onclick="loadAtt()">查詢</button>
+        <button class="blue" onclick="dlExport()">下載月報 CSV</button>
+        <button class="ghost" onclick="openReport()">書面出勤紀錄表（列印/PDF）</button>
+      </div>
+      <div id="attBody">請選擇月份</div>
+      <div style="margin-top:14px">
+        <b style="font-size:13px">每月員工確認狀態</b>
+        <div id="confBody" class="muted" style="font-size:13px">—</div>
+      </div>
+    </div>
+
+    <!-- 補登 -->
+    <div id="v-amend" class="card hidden">
+      <p><b>補登打卡（忘打卡）</b></p>
+      <p class="muted" style="font-size:12px">補登會以「補登紀錄」呈現並要求填寫事由，原始紀錄不會被修改，所有操作留有稽核軌跡。打錯的紀錄請在「出勤紀錄」頁作廢（同樣保留原始資料）。</p>
+      <div class="row">
+        <select id="amEmp"></select>
+        <select id="amType">
+          <option value="in">上班</option><option value="out">下班</option>
+          <option value="break_start">休息開始</option><option value="break_end">休息結束</option>
+        </select>
+        <input type="datetime-local" id="amWhen">
+        <input id="amReason" placeholder="事由（必填）" style="min-width:200px">
+        <button class="green" onclick="amend()">補登</button>
+      </div>
+      <div id="amendMsg" class="msg"></div>
+    </div>
+
+    <!-- 範圍 -->
+    <div id="v-fence" class="card hidden">
+      <p><b>打卡範圍（地理圍欄）</b></p>
+      <p class="muted" style="font-size:12px">設定後，範圍外打卡仍會成功（外勤屬合法出勤方式）但會標記「範圍外」供稽核。清除設定則不判斷範圍。</p>
+      <div class="row">
+        <input id="fName" placeholder="地點名稱" style="width:140px">
+        <input id="fLat" placeholder="緯度 lat" style="width:130px">
+        <input id="fLng" placeholder="經度 lng" style="width:130px">
+        <input id="fRad" placeholder="半徑(公尺)" style="width:110px">
+        <button class="green" onclick="saveFence()">儲存</button>
+        <button class="red" onclick="clearFence()">清除</button>
+        <button class="ghost" onclick="useHere()">帶入目前位置</button>
+      </div>
+      <div id="fenceMsg" class="msg"></div>
+      <div id="fenceNow" class="muted" style="font-size:13px">—</div>
+    </div>
+
+    <!-- 稽核 -->
+    <div id="v-audit" class="card hidden">
+      <div class="row"><button onclick="loadAudit()">重新整理</button></div>
+      <div id="auditBody">—</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let TOKEN = sessionStorage.getItem('nid_admin_token') || '';
+const $ = (id) => document.getElementById(id);
+const show = (id, on) => $(id).classList.toggle('hidden', !on);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const TYPE = { in:'上班', out:'下班', break_start:'休息開始', break_end:'休息結束' };
+
+function setMsg(id, cls, text) {
+  const el = $(id); el.className = 'msg ' + cls; el.textContent = text;
+  if (text) setTimeout(() => { el.className = 'msg'; }, 6000);
+}
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({ authorization: 'Bearer ' + TOKEN }, opts.headers || {});
+  if (opts.body) opts.headers['content-type'] = 'application/json';
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+  return data;
+}
+
+async function login() {
+  TOKEN = $('token').value.trim();
+  try {
+    await api('/api/admin/employees');
+    sessionStorage.setItem('nid_admin_token', TOKEN);
+    enter();
+  } catch (e) { setMsg('loginMsg', 'bad', e.message); }
+}
+
+async function enter() {
+  show('loginView', false); show('mainView', true);
+  const now = new Date();
+  $('attMonth').value = new Intl.DateTimeFormat('sv-SE',
+    { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit' })
+    .format(now).slice(0, 7);
+  loadEmps(); loadFence();
+  fetch('/api/config').then(r => r.json()).then(c => {
+    if (c.companyName) $('title').textContent = c.companyName + '｜打卡管理後台';
+  });
+}
+
+function showTab(t) {
+  document.querySelectorAll('.tab').forEach(el =>
+    el.classList.toggle('on', el.dataset.t === t));
+  ['emp','att','amend','fence','audit'].forEach(x => show('v-' + x, x === t));
+  if (t === 'att') loadAtt();
+  if (t === 'audit') loadAudit();
+}
+
+let EMPS = [];
+async function loadEmps() {
+  const r = await api('/api/admin/employees');
+  EMPS = r.employees;
+  $('empList').innerHTML = `<table><thead><tr>
+    <th>編號</th><th>姓名</th><th>LINE 綁定</th><th>綁定代碼</th><th>狀態</th><th>操作</th>
+    </tr></thead><tbody>` + EMPS.map(e => `<tr>
+    <td>${esc(e.emp_no)}</td><td>${esc(e.name)}</td>
+    <td>${e.line_user_id ? '✅ ' + esc(e.line_display_name || '') : '未綁定'}</td>
+    <td>${e.bind_code ? '<code>' + esc(e.bind_code) + '</code>' : '—'}</td>
+    <td>${e.active ? '在職' : '<span class="tag void">停用</span>'}</td>
+    <td>
+      <button class="ghost" onclick="empAction(${e.id},'rebind')">重新綁定</button>
+      ${e.active
+        ? `<button class="red" onclick="empAction(${e.id},'deactivate')">停用</button>`
+        : `<button class="green" onclick="empAction(${e.id},'activate')">啟用</button>`}
+    </td></tr>`).join('') + '</tbody></table>';
+  const opts = EMPS.filter(e => e.active)
+    .map(e => `<option value="${e.id}">${esc(e.emp_no)} ${esc(e.name)}</option>`).join('');
+  $('attEmp').innerHTML = '<option value="">全部員工</option>' + opts;
+  $('amEmp').innerHTML = opts;
+}
+
+async function addEmp() {
+  try {
+    const r = await api('/api/admin/employees', { method: 'POST',
+      body: JSON.stringify({ emp_no: $('newEmpNo').value, name: $('newName').value }) });
+    setMsg('empMsg', 'ok', `已新增，綁定代碼：${r.bind_code}（請提供給員工）`);
+    $('newEmpNo').value = ''; $('newName').value = '';
+    loadEmps();
+  } catch (e) { setMsg('empMsg', 'bad', e.message); }
+}
+
+async function empAction(id, action) {
+  if (action === 'deactivate' && !confirm('確定停用此員工？（歷史紀錄依法保留）')) return;
+  try {
+    const r = await api('/api/admin/employees/' + id, { method: 'PATCH',
+      body: JSON.stringify({ action }) });
+    if (r.bind_code) setMsg('empMsg', 'ok', '已解除綁定，新代碼：' + r.bind_code);
+    loadEmps();
+  } catch (e) { setMsg('empMsg', 'bad', e.message); }
+}
+
+async function loadAtt() {
+  const month = $('attMonth').value;
+  if (!month) return;
+  const empId = $('attEmp').value;
+  const el = $('attBody'); el.textContent = '載入中…';
+  try {
+    const r = await api(`/api/admin/punches?month=${month}` +
+      (empId ? '&employee_id=' + empId : ''));
+    if (!r.punches.length) { el.textContent = '無紀錄'; }
+    else el.innerHTML = `<table><thead><tr>
+      <th>日期</th><th>時間</th><th>員工</th><th>類別</th><th>定位</th><th>來源/事由</th><th></th>
+      </tr></thead><tbody>` + r.punches.map(p => `<tr>
+      <td>${esc(p.local_date)}</td><td>${esc(p.local_time)}</td>
+      <td>${esc(p.emp_no)} ${esc(p.employee_name)}</td>
+      <td>${TYPE[p.type] || esc(p.type)}</td>
+      <td>${p.lat === null ? '<span class="muted">無</span>'
+        : `<a target="_blank" rel="noopener" href="https://maps.google.com/?q=${p.lat},${p.lng}">${p.in_range === 0 ? '<span class="tag out">範圍外</span>' : p.in_range === 1 ? '範圍內' : '地圖'}</a>`}</td>
+      <td>${p.voided ? `<span class="tag void">作廢</span> ${esc(p.void_reason || '')}`
+          : p.source === 'amendment' ? `<span class="tag">補登</span> ${esc(p.amend_reason || '')}`
+          : '本人打卡'}${p.note ? '｜' + esc(p.note) : ''}</td>
+      <td>${p.voided ? '' : `<button class="red" onclick="voidPunch(${p.id})">作廢</button>`}</td>
+      </tr>`).join('') + '</tbody></table>';
+    const c = await api('/api/admin/confirmations?month=' + month);
+    $('confBody').textContent = c.confirmations.length
+      ? c.confirmations.map(x => `${x.emp_no} ${x.name}（${x.confirmed_at.slice(0,10)}）`).join('、')
+      : '尚無員工確認本月紀錄';
+  } catch (e) { el.textContent = '載入失敗：' + e.message; }
+}
+
+async function voidPunch(id) {
+  const reason = prompt('作廢事由（必填，原始紀錄仍會保留並留下稽核軌跡）：');
+  if (!reason) return;
+  try {
+    await api(`/api/admin/punches/${id}/void`, { method: 'POST',
+      body: JSON.stringify({ reason }) });
+    loadAtt();
+  } catch (e) { alert(e.message); }
+}
+
+async function dlFile(path, name) {
+  const r = await fetch(path, { headers: { authorization: 'Bearer ' + TOKEN } });
+  if (!r.ok) { alert('下載失敗'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(await r.blob());
+  a.download = name; a.click();
+}
+
+function dlExport() {
+  const m = $('attMonth').value, e = $('attEmp').value;
+  dlFile(`/api/admin/export?month=${m}` + (e ? '&employee_id=' + e : ''),
+    `出勤月報_${m}.csv`);
+}
+
+async function openReport() {
+  const m = $('attMonth').value, e = $('attEmp').value;
+  const r = await fetch(`/api/admin/report?month=${m}` + (e ? '&employee_id=' + e : ''),
+    { headers: { authorization: 'Bearer ' + TOKEN } });
+  if (!r.ok) { alert('產生失敗'); return; }
+  const w = window.open('', '_blank');
+  w.document.write(await r.text());
+  w.document.close();
+}
+
+async function amend() {
+  try {
+    const when = $('amWhen').value;
+    if (!when) { setMsg('amendMsg', 'bad', '請選擇時間'); return; }
+    // datetime-local 視為台北時間 → 轉 UTC ISO
+    const iso = new Date(when + ':00+08:00').toISOString();
+    const r = await api('/api/admin/punches', { method: 'POST', body: JSON.stringify({
+      employee_id: Number($('amEmp').value), type: $('amType').value,
+      punched_at: iso, reason: $('amReason').value }) });
+    setMsg('amendMsg', 'ok', `已補登：${r.date} ${r.time}`);
+    $('amReason').value = '';
+  } catch (e) { setMsg('amendMsg', 'bad', e.message); }
+}
+
+async function loadFence() {
+  const r = await api('/api/admin/settings');
+  if (r.geofence) {
+    $('fName').value = r.geofence.name || '';
+    $('fLat').value = r.geofence.lat; $('fLng').value = r.geofence.lng;
+    $('fRad').value = r.geofence.radius_m;
+    $('fenceNow').textContent = `目前設定：${r.geofence.name || '未命名'}（${r.geofence.lat}, ${r.geofence.lng}，半徑 ${r.geofence.radius_m} 公尺）`;
+  } else $('fenceNow').textContent = '目前未設定打卡範圍（不判斷範圍）';
+}
+
+async function saveFence() {
+  try {
+    await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify({
+      geofence: { name: $('fName').value, lat: Number($('fLat').value),
+        lng: Number($('fLng').value), radius_m: Number($('fRad').value) } }) });
+    setMsg('fenceMsg', 'ok', '已儲存'); loadFence();
+  } catch (e) { setMsg('fenceMsg', 'bad', e.message); }
+}
+
+async function clearFence() {
+  await api('/api/admin/settings', { method: 'PUT',
+    body: JSON.stringify({ geofence: null }) });
+  setMsg('fenceMsg', 'ok', '已清除'); loadFence();
+}
+
+function useHere() {
+  navigator.geolocation.getCurrentPosition(pos => {
+    $('fLat').value = pos.coords.latitude.toFixed(6);
+    $('fLng').value = pos.coords.longitude.toFixed(6);
+    if (!$('fRad').value) $('fRad').value = 150;
+  }, () => setMsg('fenceMsg', 'bad', '無法取得目前位置'));
+}
+
+async function loadAudit() {
+  const r = await api('/api/admin/audit?limit=200');
+  $('auditBody').innerHTML = `<table><thead><tr>
+    <th>時間(UTC)</th><th>操作者</th><th>動作</th><th>內容</th></tr></thead><tbody>` +
+    r.audit.map(a => `<tr><td>${esc(a.at.slice(0,19).replace('T',' '))}</td>
+      <td>${esc(a.actor)}</td><td>${esc(a.action)}</td>
+      <td style="font-size:12px">${esc(a.detail)}</td></tr>`).join('') +
+    '</tbody></table>';
+}
+
+if (TOKEN) { api('/api/admin/employees').then(enter).catch(() => {}); }
+</script>
+</body>
+</html>
